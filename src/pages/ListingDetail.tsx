@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
 import { motion } from 'framer-motion';
@@ -19,7 +19,8 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
-  Info
+  Info,
+  Eye
 } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
@@ -29,10 +30,12 @@ import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { fetchListing, buildRentAccessTx } from '@/services/suiClient';
-import { formatSui, truncateAddress, SUI_CONFIG } from '@/config/sui';
+import { formatSui, truncateAddress } from '@/lib/utils';
+import { SUI_CONFIG } from '@/config/sui';
 
 const ListingDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const account = useCurrentAccount();
   const { mutateAsync: signAndExecute, isPending: isTxPending } = useSignAndExecuteTransaction();
   
@@ -364,12 +367,21 @@ const ListingDetail = () => {
                     <p className="text-sm text-muted-foreground mb-4">
                       Your AccessPass NFT has been minted
                     </p>
-                    <Button
-                      className="ghost-button-primary"
-                      onClick={() => setShowRentModal(false)}
-                    >
-                      Close
-                    </Button>
+                    <div className="flex flex-col gap-3">
+                      <Button
+                        className="ghost-button-primary w-full"
+                        onClick={() => navigate(`/view/${id}`)}
+                      >
+                        <Eye className="h-4 w-4 mr-2" />
+                        View Content Now
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowRentModal(false)}
+                      >
+                        Close
+                      </Button>
+                    </div>
                   </div>
                 )}
 

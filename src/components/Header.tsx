@@ -6,9 +6,10 @@
 import { Link, useLocation } from 'react-router-dom';
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 import { motion } from 'framer-motion';
-import { Menu, X, Ghost, LayoutDashboard, Store, Upload } from 'lucide-react';
+import { Menu, X, LayoutDashboard, Store, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import LitSessionIndicator from '@/components/LitSessionIndicator';
 import logo from '@/assets/phunhuanbuilder-logo.png';
 
 const navLinks = [
@@ -75,8 +76,13 @@ export function Header() {
           })}
         </nav>
 
-        {/* Wallet Connection */}
-        <div className="flex items-center gap-4">
+        {/* Wallet Connection & Session */}
+        <div className="flex items-center gap-3">
+          {account && (
+            <div className="hidden sm:block">
+              <LitSessionIndicator />
+            </div>
+          )}
           <div className="hidden sm:block">
             <ConnectButton 
               connectText="Connect Wallet"
