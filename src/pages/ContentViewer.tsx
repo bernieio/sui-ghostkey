@@ -3,12 +3,11 @@ import { useParams } from "react-router-dom";
 import { useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
 import { litService } from "@/services/litProtocol";
 import { SUI_CONFIG } from "@/config/sui";
-import { Listing } from "@/types/marketplace"; // Giả sử Listing type đã đúng
-import { Loader2, Lock, AlertTriangle, Download } from "lucide-react";
+import { Listing } from "@/types/marketplace";
+import { Loader2, Lock, AlertTriangle, FileText, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-// Đã khai báo trong vite-env.d.ts nên import này sẽ OK
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { atomDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -23,51 +22,12 @@ const ContentViewer = () => {
   const [decryptedContent, setDecryptedContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Hàm helper để parse Data URL
-  const renderContent = () => {
-    if (!decryptedContent) return null;
-
-    // Check if it is a Data URL
-    if (decryptedContent.startsWith("data:")) {
-      const mimeType = decryptedContent.split(";")[0].split(":")[1];
-
-      // Nếu là ảnh -> Hiện thẻ img
-      if (mimeType.startsWith("image/")) {
-        return (
-          <div className="flex justify-center p-4">
-            <img src={decryptedContent} alt="Decrypted" className="max-w-full h-auto rounded-lg shadow-lg" />
-          </div>
-        );
-      }
-
-      // Nếu là text/json -> Decode Base64 và hiện code
-      if (mimeType.startsWith("text/") || mimeType.includes("json")) {
-        try {
-          // Decode base64 part
-          const base64Part = decryptedContent.split(",")[1];
-          const text = atob(base64Part);
-          return (
-            <SyntaxHighlighter language="json" style={atomDark}>
-              {text}
-            </SyntaxHighlighter>
-          );
-        } catch (e) {
-          return <div>Error decoding text content</div>;
-        }
-      }
-    }
-
-    // Fallback cho text thường
-    return (
-      <SyntaxHighlighter language="text" style={atomDark}>
-        {decryptedContent}
-      </SyntaxHighlighter>
-    );
-  };
-
   useEffect(() => {
     const fetchListing = async () => {
-      if (!listingId) return;
+      if (!listingId) {
+        setLoading(false);
+        return;
+      }
       try {
         const obj = await suiClient.getObject({
           id: listingId,
@@ -76,53 +36,60 @@ const ContentViewer = () => {
 
         if (obj.data?.content?.dataType === "moveObject") {
           const fields = obj.data.content.fields as any;
-          // FIX: Mapping snake_case (Sui) -> camelCase (Frontend Type)
-          setListing({
+          const mappedListing: Listing = {
             id: obj.data.objectId,
             seller: fields.seller,
-            basePrice: fields.base_price, // Fix TS2353
+            basePrice: fields.base_price,
             priceSlope: fields.price_slope,
             activeRentals: fields.active_rentals,
-            walrusBlobId: fields.walrus_blob_id, // Fix TS2551
-            litDataHash: fields.lit_data_hash, // Fix TS2551
-            mimeType: fields.mime_type || "text/plain", // Fix TS2551
+            walrusBlobId: fields.walrus_blob_id,
+            litDataHash: fields.lit_data_hash,
+            mimeType: fields.mime_type || "text/plain",
             balance: fields.balance,
             isActive: fields.is_active,
-          } as any); // Cast any tạm thời nếu Listing type chưa update kịp
+            lastDecayTimestamp: fields.last_decay_timestamp || "0",
+            decayedThisPeriod: fields.decayed_this_period || "0",
+          };
+          setListing(mappedListing);
+        } else {
+          setError("Listing data not found");
         }
       } catch (err) {
-        console.error(err);
         setError("Failed to load listing details");
       } finally {
         setLoading(false);
       }
     };
-
     fetchListing();
   }, [listingId, suiClient]);
 
   const handleDecrypt = async () => {
-    // Fix: Access property using camelCase map
     if (!listing || !account || !listingId) return;
 
     setDecrypting(true);
     try {
-      // Fix TS2551: use correct property name from state mapping
-      const blobId = (listing as any).walrusBlobId || (listing as any).walrus_blob_id;
-
-      const aggregatorUrl = `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`;
+      const blobId = listing.walrusBlobId;
       console.log("📥 Fetching from Walrus:", blobId);
 
+      const aggregatorUrl = `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`;
       const response = await fetch(aggregatorUrl);
+
       if (!response.ok) throw new Error(`Walrus fetch failed: ${response.statusText}`);
 
-      const ciphertext = await response.text();
+      // FIX: Lấy dữ liệu dưới dạng ArrayBuffer (Raw Bytes)
+      // Không dùng .text() vì nó làm hỏng dữ liệu binary
+      const arrayBuffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
 
-      // Fix TS2551 & TS2551: use correct prop and config key
-      const dataHash = (listing as any).litDataHash || (listing as any).lit_data_hash;
-      const packageId = SUI_CONFIG.packageId; // Fix TS2551 (lowercase p)
+      console.log("✅ Ciphertext bytes fetched, size:", bytes.length);
 
-      const content = await litService.decryptFile(ciphertext, dataHash, listingId, packageId, account.address);
+      const content = await litService.decryptFile(
+        bytes, // Truyền Raw Bytes vào service
+        listing.litDataHash,
+        listingId,
+        SUI_CONFIG.packageId,
+        account.address,
+      );
 
       setDecryptedContent(content);
       toast.success("Content decrypted successfully!");
@@ -134,33 +101,82 @@ const ContentViewer = () => {
     }
   };
 
-  // ... (Phần render giữ nguyên)
-  if (loading) return <div>Loading...</div>; // Rút gọn cho ví dụ
-  if (!listing) return <div>Not found</div>;
+  const renderContent = () => {
+    if (!decryptedContent) return null;
+
+    if (decryptedContent.startsWith("data:")) {
+      const mimeType = decryptedContent.split(";")[0].split(":")[1];
+
+      if (mimeType.startsWith("image/")) {
+        return (
+          <div className="flex justify-center p-4">
+            <img src={decryptedContent} alt="Decrypted" className="max-w-full h-auto rounded-lg shadow-lg" />
+          </div>
+        );
+      }
+
+      if (mimeType.startsWith("text/") || mimeType.includes("json")) {
+        try {
+          const base64Part = decryptedContent.split(",")[1];
+          const text = atob(base64Part);
+          return (
+            <SyntaxHighlighter language="json" style={atomDark} customStyle={{ margin: 0, padding: "1.5rem" }}>
+              {text}
+            </SyntaxHighlighter>
+          );
+        } catch (e) {
+          return <div>Error decoding text content</div>;
+        }
+      }
+    }
+
+    return (
+      <SyntaxHighlighter language="text" style={atomDark} customStyle={{ margin: 0, padding: "1.5rem" }}>
+        {decryptedContent}
+      </SyntaxHighlighter>
+    );
+  };
+
+  if (loading)
+    return (
+      <div className="pt-24 text-center">
+        <Loader2 className="animate-spin mx-auto" />
+      </div>
+    );
+  if (!listing) return <div className="pt-24 text-center">Listing not found</div>;
 
   return (
     <div className="min-h-screen pt-24 pb-12 bg-[#0d0d0d]">
       <div className="container mx-auto px-4 max-w-4xl">
         <Card className="bg-[#1a1a1a] border-gray-800 p-6 mb-8">
-          {/* ... Header ... */}
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-2xl font-bold text-white">Protected Content Viewer</h1>
+            <div className="flex items-center space-x-2 text-sm text-gray-400">
+              <Lock className="w-4 h-4" />
+              <span>End-to-End Encrypted</span>
+            </div>
+          </div>
 
-          {!decryptedContent ? (
-            <div className="text-center">
-              <Button onClick={handleDecrypt} disabled={decrypting}>
-                {decrypting ? "Unlocking..." : "Unlock Content"}
+          {!account ? (
+            <div className="text-center py-12 bg-black/20 rounded-lg border border-dashed border-gray-700">
+              <p className="text-gray-400 mb-4">Please connect your wallet</p>
+            </div>
+          ) : !decryptedContent ? (
+            <div className="text-center py-12 bg-black/20 rounded-lg border border-dashed border-gray-700">
+              <Lock className="w-12 h-12 text-primary mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-white mb-2">Content Locked</h3>
+              <Button
+                size="lg"
+                onClick={handleDecrypt}
+                disabled={decrypting}
+                className="bg-primary hover:bg-primary/90 text-black font-semibold mt-4"
+              >
+                {decrypting ? <Loader2 className="animate-spin mr-2" /> : null}
+                {decrypting ? "Decrypting..." : "Unlock Content"}
               </Button>
             </div>
           ) : (
-            <div className="rounded-lg overflow-hidden border border-gray-700 bg-[#0d0d0d]">
-              <SyntaxHighlighter
-                language={(listing as any).mimeType === "application/json" ? "json" : "text"}
-                style={atomDark}
-                customStyle={{ margin: 0, padding: "1.5rem" }}
-                showLineNumbers
-              >
-                {decryptedContent}
-              </SyntaxHighlighter>
-            </div>
+            <div className="rounded-lg overflow-hidden border border-gray-700 bg-[#0d0d0d]">{renderContent()}</div>
           )}
         </Card>
       </div>

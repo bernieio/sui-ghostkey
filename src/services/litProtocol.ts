@@ -14,36 +14,60 @@ export interface SessionData {
 }
 
 export interface EncryptionResult {
-  ciphertext: string; // Will be HEX string
+  ciphertext: string;
   dataToEncryptHash: string;
 }
 
-// --- HELPERS ---
+// --- UNIVERSAL DATA ADAPTER ---
 
 /**
- * Convert Base64 to Hex safely using Uint8Array
+ * Chuyển đổi mọi loại dữ liệu đầu vào (Raw Bytes, Base64 String, Hex String)
+ * thành định dạng HEX String chuẩn mà Lit SDK V6 yêu cầu.
  */
-function base64ToHex(base64: string): string {
+function adaptCiphertextToHex(data: Uint8Array): string {
   try {
-    const raw = atob(base64);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) {
-      bytes[i] = raw.charCodeAt(i);
+    // 1. Thử convert bytes sang string để kiểm tra format
+    const textDecoder = new TextDecoder();
+    const str = textDecoder.decode(data).trim();
+
+    // Case A: Dữ liệu là HEX String (VD: "7b226d...")
+    // Chỉ chứa 0-9, a-f và độ dài chẵn
+    if (/^[0-9a-fA-F]+$/.test(str) && str.length % 2 === 0) {
+      console.log("Detected format: HEX String");
+      return str;
     }
 
-    return Array.from(bytes)
-      .map((byte) => byte.toString(16).padStart(2, "0"))
+    // Case B: Dữ liệu là Base64 String (VD: "eyJt...")
+    // Chứa ký tự Base64 và có thể có padding "="
+    // Kiểm tra sơ bộ bằng Regex Base64
+    if (/^[A-Za-z0-9+/=]+$/.test(str)) {
+      try {
+        const raw = atob(str);
+        console.log("Detected format: Base64 String");
+        // Convert raw binary string to Hex
+        let hex = "";
+        for (let i = 0; i < raw.length; i++) {
+          hex += raw.charCodeAt(i).toString(16).padStart(2, "0");
+        }
+        return hex;
+      } catch (e) {
+        // Nếu atob lỗi, nghĩa là không phải Base64 hợp lệ -> Fallthrough xuống Case C
+      }
+    }
+
+    // Case C: Dữ liệu là Raw Binary (Ciphertext gốc)
+    // Convert trực tiếp từng byte sang Hex
+    console.log("Detected format: Raw Binary");
+    return Array.from(data)
+      .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   } catch (e) {
-    console.error("Base64 to Hex conversion error:", e);
-    return base64; // Fallback
+    console.error("Ciphertext adaptation failed:", e);
+    throw new Error("Failed to process ciphertext format");
   }
 }
 
-/**
- * Convert File to Data URL (Base64)
- * Preserves binary data (images, pdfs) correctly
- */
+// --- HELPER: FILE TO DATA URL ---
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -53,7 +77,7 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-// LIT ACTION
+// --- LIT ACTION ---
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
@@ -80,10 +104,7 @@ const LIT_ACTION_VERIFY_ACCESS = `
         body
       });
       const res = await resp.json();
-      
-      if (!res.result || !res.result.data) return false;
-
-      const objects = res.result.data;
+      const objects = res.result?.data || [];
       const now = Date.now();
 
       const validPass = objects.find(obj => {
@@ -190,13 +211,12 @@ class LitProtocolService {
 
     const domain = window.location.host || "localhost";
     const origin = window.location.origin || "http://localhost:5173";
-    const statement = "Authorize GhostKey access to Lit Protocol.";
     const nonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
 
     const siweMessage = `${domain} wants you to sign in with your Ethereum account:
 ${address}
 
-${statement}
+Authorize GhostKey access to Lit Protocol.
 
 URI: ${origin}
 Version: 1
@@ -238,7 +258,7 @@ Expiration Time: ${expiration}`;
     return true;
   }
 
-  // --- ENCRYPT (Updated) ---
+  // --- ENCRYPT ---
   async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
     const session = await this.ensureSession();
@@ -252,21 +272,21 @@ Expiration Time: ${expiration}`;
 
     const accessControlConditions = this.getUnifiedAccessControlConditions();
 
-    // STEP 1: Convert File to Data URL (Base64) to preserve binary data
+    // Convert file to Data URL to preserve binary content
     const fileContentBase64 = await fileToDataUrl(file);
 
     const params: any = {
       accessControlConditions,
-      dataToEncrypt: fileContentBase64, // Encrypt the Base64 Data URL string
+      dataToEncrypt: fileContentBase64,
       authSig,
       chain: "ethereum",
     };
 
     const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(params, this.litNodeClient!);
 
-    // STEP 2: Convert Ciphertext (Base64) to Hex for storage
-    // Lit Decrypt wants Hex, so we store Hex.
-    const ciphertextHex = base64ToHex(ciphertext);
+    // IMPORTANT: Always normalize to HEX before returning
+    // encryptString returns Base64, but we want to store HEX for robustness
+    const ciphertextHex = adaptCiphertextToHex(new TextEncoder().encode(ciphertext));
 
     return {
       ciphertext: ciphertextHex,
@@ -274,9 +294,9 @@ Expiration Time: ${expiration}`;
     };
   }
 
-  // --- DECRYPT (Updated) ---
+  // --- DECRYPT ---
   async decryptFile(
-    ciphertextHex: string, // Expecting Hex String from Walrus
+    ciphertextBytes: Uint8Array, // Nhận Raw Bytes từ Walrus
     dataToEncryptHash: string,
     listingId: string,
     packageId: string,
@@ -292,12 +312,15 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
+    // 1. Chuẩn hóa dữ liệu đầu vào thành HEX String
+    const ciphertextHex = adaptCiphertextToHex(ciphertextBytes);
+
     const accessControlConditions = this.getUnifiedAccessControlConditions();
 
     const params: any = {
       accessControlConditions,
       chain: "ethereum",
-      ciphertext: ciphertextHex, // Pass Hex directly
+      ciphertext: ciphertextHex,
       dataToEncryptHash,
       authSig,
       litActionCode: LIT_ACTION_VERIFY_ACCESS,
@@ -308,21 +331,17 @@ Expiration Time: ${expiration}`;
       },
     };
 
-    console.log("🔓 Decrypting Hex Ciphertext:", ciphertextHex.slice(0, 20) + "...");
+    console.log("🔓 Decrypting Hex (len):", ciphertextHex.length);
 
     try {
-      // Result will be the Data URL string we encrypted
       const decryptedDataUrl = await LitJsSdk.decryptToString(params, this.litNodeClient!);
-
-      // We return the Data URL directly.
-      // The UI can handle it (Image src or Text decode).
       return decryptedDataUrl;
     } catch (error: any) {
       console.error("Lit Decrypt Failed:", error);
-
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
         localStorage.removeItem(SESSION_KEY);
-        return this.decryptFile(ciphertextHex, dataToEncryptHash, listingId, packageId, userAddress);
+        // Retry recursively
+        return this.decryptFile(ciphertextBytes, dataToEncryptHash, listingId, packageId, userAddress);
       }
       throw error;
     }
