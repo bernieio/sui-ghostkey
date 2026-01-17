@@ -1,6 +1,10 @@
 /**
  * useSuiEvents Hook
  * Subscribe to real-time Sui blockchain events
+ * 
+ * NOTE: Sui testnet public nodes have limited WebSocket support.
+ * This hook will attempt WebSocket subscription but fail gracefully.
+ * Primary data refresh is handled by React Query polling/refetch.
  */
 
 import { useEffect, useRef, useCallback } from 'react';
@@ -17,6 +21,7 @@ interface EventHandler {
 
 /**
  * Subscribe to a single Sui event type
+ * Will fail gracefully if WebSocket is not available
  */
 export function useSuiEvent(
   eventType: EventType,
@@ -29,9 +34,14 @@ export function useSuiEvent(
   const queryClient = useQueryClient();
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const enabled = options?.enabled ?? true;
+  const hasSubscribedRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
+    
+    // Prevent duplicate subscriptions
+    if (hasSubscribedRef.current) return;
+    hasSubscribedRef.current = true;
 
     const subscribe = async () => {
       try {
@@ -50,33 +60,40 @@ export function useSuiEvent(
         });
         
         unsubscribeRef.current = unsubscribe;
-        console.log(`✅ Subscribed to ${eventType} events`);
+        // Only log if subscription actually succeeded (check if unsubscribe is not no-op)
       } catch (error) {
-        console.error(`Failed to subscribe to ${eventType}:`, error);
+        // Silently fail - WebSocket not available on public nodes
+        console.debug(`Event subscription for ${eventType} not available`);
       }
     };
 
     subscribe();
 
     return () => {
+      hasSubscribedRef.current = false;
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
         unsubscribeRef.current = null;
-        console.log(`🔌 Unsubscribed from ${eventType} events`);
       }
     };
-  }, [eventType, callback, enabled, queryClient, options?.invalidateQueries]);
+  }, [eventType, enabled]); // Removed callback and options from deps to prevent re-subscription
 }
 
 /**
  * Subscribe to multiple Sui event types
+ * Will fail gracefully if WebSocket is not available
  */
 export function useSuiEvents(handlers: EventHandler[], enabled: boolean = true) {
   const queryClient = useQueryClient();
   const unsubscribesRef = useRef<Map<EventType, () => void>>(new Map());
+  const hasSubscribedRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
+    
+    // Prevent duplicate subscriptions
+    if (hasSubscribedRef.current) return;
+    hasSubscribedRef.current = true;
 
     const subscribeAll = async () => {
       for (const handler of handlers) {
@@ -96,9 +113,9 @@ export function useSuiEvents(handlers: EventHandler[], enabled: boolean = true) 
           });
           
           unsubscribesRef.current.set(handler.eventType, unsubscribe);
-          console.log(`✅ Subscribed to ${handler.eventType} events`);
         } catch (error) {
-          console.error(`Failed to subscribe to ${handler.eventType}:`, error);
+          // Silently fail - WebSocket not available on public nodes
+          console.debug(`Event subscription for ${handler.eventType} not available`);
         }
       }
     };
@@ -106,18 +123,22 @@ export function useSuiEvents(handlers: EventHandler[], enabled: boolean = true) 
     subscribeAll();
 
     return () => {
-      unsubscribesRef.current.forEach((unsubscribe, eventType) => {
+      hasSubscribedRef.current = false;
+      unsubscribesRef.current.forEach((unsubscribe) => {
         unsubscribe();
-        console.log(`🔌 Unsubscribed from ${eventType} events`);
       });
       unsubscribesRef.current.clear();
     };
-  }, [handlers, enabled, queryClient]);
+  }, [enabled]); // Removed handlers from deps to prevent re-subscription
 }
 
 /**
  * Pre-configured hook for marketplace events
  * Automatically invalidates relevant queries when events occur
+ * 
+ * NOTE: Due to Sui testnet WebSocket limitations, this hook may not
+ * receive real-time events. React Query refetchInterval is the primary
+ * mechanism for data freshness.
  */
 export function useMarketplaceEvents(options?: {
   enabled?: boolean;
