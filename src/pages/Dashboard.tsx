@@ -23,7 +23,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { fetchSellerListings } from '@/services/suiClient';
-import { formatSui, truncateAddress } from '@/config/sui';
+import { formatSui, truncateAddress } from '@/lib/utils';
+import AccessPassList from '@/components/AccessPassList';
+import ListingActions from '@/components/ListingActions';
 
 const StatCard = ({ 
   title, 

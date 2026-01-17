@@ -151,14 +151,18 @@ const Upload = () => {
         transaction: tx,
       });
 
-      // Extract listing ID from transaction digest
+      // Use transaction digest as listing identifier for now
+      // Note: In production, parse objectChanges from a full transaction response
       const newListingId = result.digest;
       
       setListingId(newListingId);
       updateProcessingStep('deploy', 'complete');
       
       // Store encrypted symmetric key locally (for hackathon)
-      localStorage.setItem(`ghostkey_key_${newListingId}`, encryptionResult.encryptedSymmetricKey);
+      localStorage.setItem(`ghostkey_listing_${newListingId}`, JSON.stringify({
+        encryptedSymmetricKey: encryptionResult.encryptedSymmetricKey,
+        blobId: walrusResult.blobId,
+      }));
       
       setStep('complete');
     } catch (err) {
