@@ -6,6 +6,7 @@
 import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/dapp-kit';
 import { getFullnodeUrl } from '@mysten/sui/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 
 // Configure networks
 const { networkConfig } = createNetworkConfig({
@@ -13,12 +14,12 @@ const { networkConfig } = createNetworkConfig({
   mainnet: { url: getFullnodeUrl('mainnet') },
 });
 
-// Create query client with GhostKey-specific defaults
+// Create query client with GhostKey-specific defaults - only once
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30 * 1000, // 30 seconds
-      gcTime: 5 * 60 * 1000, // 5 minutes
+      staleTime: 30 * 1000,
+      gcTime: 5 * 60 * 1000,
       retry: 3,
       refetchOnWindowFocus: false,
     },
@@ -26,7 +27,7 @@ const queryClient = new QueryClient({
 });
 
 interface SuiProviderProps {
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 export function SuiProvider({ children }: SuiProviderProps) {
