@@ -124,7 +124,7 @@ const Dashboard = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <StatCard
                   title="Total Revenue"
-                  value={`${formatSui(totalRevenue)} SUI`}
+                  value={formatSui(totalRevenue)}
                   icon={TrendingUp}
                   description="Accumulated earnings"
                 />
@@ -142,7 +142,7 @@ const Dashboard = () => {
                 />
                 <StatCard
                   title="Wallet Balance"
-                  value={`${formatSui(totalRevenue)} SUI`}
+                  value={formatSui(totalRevenue)}
                   icon={Wallet}
                   description="Available to withdraw"
                 />
@@ -197,6 +197,7 @@ const Dashboard = () => {
                               <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Rentals</th>
                               <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Balance</th>
                               <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Status</th>
+                              <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Actions</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -233,6 +234,14 @@ const Dashboard = () => {
                                     {listing.isActive ? 'Active' : 'Paused'}
                                   </Badge>
                                 </td>
+                                <td className="py-3 px-4">
+                                  <ListingActions 
+                                    listing={listing} 
+                                    onSuccess={() => {
+                                      // Trigger refetch
+                                    }}
+                                  />
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -242,6 +251,11 @@ const Dashboard = () => {
                   </CardContent>
                 </Card>
               )}
+
+              {/* My Access Passes */}
+              <div className="mt-8">
+                <AccessPassList />
+              </div>
             </>
           )}
         </div>
