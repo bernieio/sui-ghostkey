@@ -14,53 +14,46 @@ export interface SessionData {
 }
 
 export interface EncryptionResult {
-  ciphertext: string;
+  ciphertext: string; // Will be HEX string
   dataToEncryptHash: string;
 }
 
-// --- HELPER: ROBUST DATA CONVERSION ---
+// --- HELPERS ---
 
 /**
- * Chuyển Base64 (kể cả Data URI) sang Hex String an toàn.
- * Khắc phục triệt để lỗi 'InvalidCharacterError' và 'Failed to hex decode'.
+ * Convert Base64 to Hex safely using Uint8Array
  */
-function base64ToHex(base64Input: string): string {
+function base64ToHex(base64: string): string {
   try {
-    if (!base64Input) return "";
-
-    // 1. Làm sạch chuỗi: Xóa khoảng trắng, xuống dòng
-    let cleanStr = base64Input.replace(/\s/g, "");
-
-    // 2. Xóa Data URI Prefix nếu có (VD: "data:application/octet-stream;base64,")
-    if (cleanStr.includes(",")) {
-      cleanStr = cleanStr.split(",")[1];
+    const raw = atob(base64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+      bytes[i] = raw.charCodeAt(i);
     }
 
-    // 3. Nếu chuỗi trông có vẻ là Hex rồi (chỉ chứa 0-9, a-f), trả về luôn
-    // (Tránh trường hợp dữ liệu đã là Hex mà lại đem đi decode Base64)
-    if (/^[0-9a-fA-F]+$/.test(cleanStr) && cleanStr.length % 2 === 0) {
-      return cleanStr;
-    }
-
-    // 4. Giải mã Base64 sang Binary String
-    const binaryStr = atob(cleanStr);
-
-    // 5. Chuyển Binary String sang Hex
-    let hexResult = "";
-    for (let i = 0; i < binaryStr.length; i++) {
-      const hex = binaryStr.charCodeAt(i).toString(16).padStart(2, "0");
-      hexResult += hex;
-    }
-
-    return hexResult;
+    return Array.from(bytes)
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
   } catch (e) {
-    console.error("Critical: Base64 to Hex conversion failed.", e);
-    // Fallback: Trả về chuỗi gốc để Lit SDK tự xử lý (hy vọng mong manh)
-    return base64Input;
+    console.error("Base64 to Hex conversion error:", e);
+    return base64; // Fallback
   }
 }
 
-// LIT ACTION: Verify Ownership on Sui
+/**
+ * Convert File to Data URL (Base64)
+ * Preserves binary data (images, pdfs) correctly
+ */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// LIT ACTION
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
@@ -114,7 +107,6 @@ class LitProtocolService {
   private burnerWallet: ethers.Wallet | null = null;
   private isConnecting: boolean = false;
 
-  // --- CONNECTION ---
   async connect(): Promise<LitNodeClient> {
     if (this.litNodeClient?.ready) return this.litNodeClient;
 
@@ -140,7 +132,6 @@ class LitProtocolService {
     }
   }
 
-  // --- ACCESS CONTROL CONDITIONS ---
   private getUnifiedAccessControlConditions() {
     return [
       {
@@ -157,7 +148,6 @@ class LitProtocolService {
     ];
   }
 
-  // --- SESSION & WALLET ---
   private getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) return this.burnerWallet;
     const storedKey = localStorage.getItem(BURNER_WALLET_KEY);
@@ -228,8 +218,6 @@ Expiration Time: ${expiration}`;
     return sessionData;
   }
 
-  // --- PUBLIC API ---
-
   getSessionExpiry(): number | null {
     const session = this.getStoredSession();
     return session ? session.expiry : null;
@@ -250,7 +238,7 @@ Expiration Time: ${expiration}`;
     return true;
   }
 
-  // --- ENCRYPT ---
+  // --- ENCRYPT (Updated) ---
   async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
     const session = await this.ensureSession();
@@ -263,23 +251,32 @@ Expiration Time: ${expiration}`;
     };
 
     const accessControlConditions = this.getUnifiedAccessControlConditions();
-    const fileContent = await file.text();
+
+    // STEP 1: Convert File to Data URL (Base64) to preserve binary data
+    const fileContentBase64 = await fileToDataUrl(file);
 
     const params: any = {
       accessControlConditions,
-      dataToEncrypt: fileContent,
+      dataToEncrypt: fileContentBase64, // Encrypt the Base64 Data URL string
       authSig,
       chain: "ethereum",
     };
 
     const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(params, this.litNodeClient!);
 
-    return { ciphertext, dataToEncryptHash };
+    // STEP 2: Convert Ciphertext (Base64) to Hex for storage
+    // Lit Decrypt wants Hex, so we store Hex.
+    const ciphertextHex = base64ToHex(ciphertext);
+
+    return {
+      ciphertext: ciphertextHex,
+      dataToEncryptHash,
+    };
   }
 
-  // --- DECRYPT ---
+  // --- DECRYPT (Updated) ---
   async decryptFile(
-    ciphertext: string,
+    ciphertextHex: string, // Expecting Hex String from Walrus
     dataToEncryptHash: string,
     listingId: string,
     packageId: string,
@@ -295,15 +292,12 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    // FIX: Tự động chuẩn hóa dữ liệu đầu vào sang Hex
-    const hexCiphertext = base64ToHex(ciphertext);
-
     const accessControlConditions = this.getUnifiedAccessControlConditions();
 
     const params: any = {
       accessControlConditions,
       chain: "ethereum",
-      ciphertext: hexCiphertext, // Đảm bảo Hex
+      ciphertext: ciphertextHex, // Pass Hex directly
       dataToEncryptHash,
       authSig,
       litActionCode: LIT_ACTION_VERIFY_ACCESS,
@@ -314,26 +308,22 @@ Expiration Time: ${expiration}`;
       },
     };
 
-    // Debug Log quan trọng
-    console.log("🔓 Decrypt Params:", {
-      cipherLen: ciphertext.length,
-      hexLen: hexCiphertext.length,
-      isHex: /^[0-9a-fA-F]+$/.test(hexCiphertext),
-    });
+    console.log("🔓 Decrypting Hex Ciphertext:", ciphertextHex.slice(0, 20) + "...");
 
     try {
-      const decryptedString = await LitJsSdk.decryptToString(params, this.litNodeClient!);
-      return decryptedString;
+      // Result will be the Data URL string we encrypted
+      const decryptedDataUrl = await LitJsSdk.decryptToString(params, this.litNodeClient!);
+
+      // We return the Data URL directly.
+      // The UI can handle it (Image src or Text decode).
+      return decryptedDataUrl;
     } catch (error: any) {
       console.error("Lit Decrypt Failed:", error);
 
-      // Auto-recover session
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
-        console.warn("AuthSig invalid, regenerating session...");
         localStorage.removeItem(SESSION_KEY);
-        return this.decryptFile(ciphertext, dataToEncryptHash, listingId, packageId, userAddress);
+        return this.decryptFile(ciphertextHex, dataToEncryptHash, listingId, packageId, userAddress);
       }
-
       throw error;
     }
   }
