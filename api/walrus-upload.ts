@@ -4,10 +4,15 @@ export const config = {
 
 const PUBLISHERS = [
   "https://publisher.walrus-testnet.walrus.space",
-  "https://walrus-testnet-publisher.nodes.guru",
-  "https://walrus-testnet-publisher.staketab.org",
+  "https://wal-publisher-testnet.staketab.org",
+  "https://walrus-testnet-publisher.bartestnet.com",
+  "https://walrus-testnet-publisher.nodeinfra.com",
+  "https://walrus-testnet.stakingdefenseleague.com",
   "https://walrus.testnet.pops.one",
-  "https://ivory-appalling-hamster.walrus-testnet.quiknode.pro",
+  "https://sui-walrus-testnet.bwarelabs.com/publisher",
+  "https://walrus-publish-testnet.chainode.tech:9003",
+  "https://testnet-publisher.walrus.space",
+  "https://walrus-testnet-publisher.redundex.com",
 ];
 
 const TIMEOUT_MS = 45000;
