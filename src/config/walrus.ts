@@ -28,7 +28,8 @@ export const WALRUS_CONFIG = {
  * Get the URL to retrieve a blob from Walrus
  */
 export const getWalrusBlobUrl = (blobId: string): string => {
-  return `${WALRUS_CONFIG.aggregatorUrl}/v1/${blobId}`;
+  // Correct aggregator endpoint for blob retrieval
+  return `${WALRUS_CONFIG.aggregatorUrl}/v1/blobs/${blobId}`;
 };
 
 export default WALRUS_CONFIG;

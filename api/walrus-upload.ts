@@ -1,11 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+// Walrus testnet publisher endpoint
 const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, PUT, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   // Handle preflight
@@ -13,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  if (req.method !== 'POST') {
+  if (req.method !== 'POST' && req.method !== 'PUT') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
@@ -27,19 +28,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const body = Buffer.concat(chunks);
 
+    if (body.length === 0) {
+      return res.status(400).json({ error: 'Empty request body' });
+    }
+
     console.log(`Proxying upload to Walrus, size: ${body.length} bytes, epochs: ${epochs}`);
 
-    // Forward to Walrus publisher
-    const walrusResponse = await fetch(
-      `${WALRUS_PUBLISHER_URL}/v1/store?epochs=${epochs}`,
-      {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/octet-stream',
-        },
-        body: body,
-      }
-    );
+    // Forward to Walrus publisher - correct endpoint is /v1/blobs
+    const walrusUrl = `${WALRUS_PUBLISHER_URL}/v1/blobs?epochs=${epochs}`;
+    console.log(`Walrus URL: ${walrusUrl}`);
+    
+    const walrusResponse = await fetch(walrusUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+      },
+      body: body,
+    });
 
     if (!walrusResponse.ok) {
       const errorText = await walrusResponse.text();
