@@ -1,13 +1,16 @@
 /**
  * Lit Protocol Service for GhostKey
- * Refactored: Lit Action-based decryption for AccessPass NFT holders
+ * Refactored: Walrus stores ciphertext, Sui stores dataToEncryptHash
  * 
- * Key change: Encryption data (ciphertext + dataToEncryptHash) is stored on-chain
- * in lit_data_hash field, allowing any AccessPass holder to decrypt.
+ * Architecture:
+ * - Seller encrypts file with Lit Protocol
+ * - Ciphertext (large) -> stored on Walrus
+ * - dataToEncryptHash (small) -> stored on Sui (lit_data_hash field)
+ * - Buyer fetches ciphertext from Walrus, hash from Sui, then decrypts via Lit
  */
 
-import { LitNodeClient } from '@lit-protocol/lit-node-client';
 import * as LitJsSdk from '@lit-protocol/lit-node-client';
+import { LitNodeClient } from '@lit-protocol/lit-node-client';
 import { LIT_CONFIG } from '@/config/lit';
 import { SUI_CONFIG } from '@/config/sui';
 import { ethers } from 'ethers';
@@ -23,18 +26,8 @@ interface SessionData {
 }
 
 export interface EncryptionResult {
-  ciphertext: Uint8Array;
-  dataHash: string;
-  // This contains the Lit-encrypted symmetric key data
-  // Will be stored on-chain in lit_data_hash field
-  litEncryptedKeyJson: string;
-}
-
-interface DecryptionParams {
-  ciphertext: Uint8Array;
-  litEncryptedKeyJson: string;
-  listingId: string;
-  userAddress: string;
+  ciphertext: string;         // Base64 encoded - stored on Walrus
+  dataToEncryptHash: string;  // Stored on Sui (lit_data_hash)
 }
 
 // Lit Action code that runs on Lit nodes to verify Sui AccessPass ownership
@@ -140,21 +133,18 @@ class LitProtocolService {
       return this.burnerWallet;
     }
 
-    // Check for environment variable private key
     if (LIT_CONFIG.burnerPrivateKey) {
       console.log('Using configured burner wallet');
       this.burnerWallet = new ethers.Wallet(LIT_CONFIG.burnerPrivateKey);
       return this.burnerWallet;
     }
 
-    // Check for existing burner wallet in storage
     const storedKey = sessionStorage.getItem(BURNER_WALLET_KEY);
     if (storedKey) {
       this.burnerWallet = new ethers.Wallet(storedKey);
       return this.burnerWallet;
     }
 
-    // Create new burner wallet
     this.burnerWallet = ethers.Wallet.createRandom();
     sessionStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
     console.log('Created new burner wallet for Lit auth');
@@ -170,9 +160,6 @@ class LitProtocolService {
     return Date.now() < sessionData.expiry;
   }
 
-  /**
-   * Get stored session data
-   */
   private getStoredSession(): SessionData | null {
     try {
       const stored = localStorage.getItem(SESSION_KEY);
@@ -183,25 +170,16 @@ class LitProtocolService {
     }
   }
 
-  /**
-   * Store session data
-   */
   private storeSession(data: SessionData): void {
     localStorage.setItem(SESSION_KEY, JSON.stringify(data));
   }
 
-  /**
-   * Clear session data (logout)
-   */
   clearSession(): void {
     localStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(BURNER_WALLET_KEY);
     this.burnerWallet = null;
   }
 
-  /**
-   * Generate a new authentication session
-   */
   async generateSession(): Promise<SessionData> {
     const wallet = this.getBurnerWallet();
     const expiryDays = LIT_CONFIG.sessionDurationDays;
@@ -221,9 +199,6 @@ class LitProtocolService {
     return sessionData;
   }
 
-  /**
-   * Ensure we have a valid session
-   */
   async ensureSession(): Promise<SessionData> {
     if (this.hasValidSession()) {
       return this.getStoredSession()!;
@@ -232,8 +207,17 @@ class LitProtocolService {
   }
 
   /**
-   * Get Access Control Conditions
-   * Using basic EVM condition - actual access control is done via Lit Action
+   * Get session expiry date (for UI display)
+   */
+  getSessionExpiry(): Date | null {
+    const session = this.getStoredSession();
+    if (!session) return null;
+    return new Date(session.expiry);
+  }
+
+  /**
+   * Get Access Control Conditions for Lit Protocol
+   * Simple EVM condition - actual access check is via verifyAccess() before decrypt
    */
   private getAccessControlConditions() {
     return [
@@ -253,105 +237,58 @@ class LitProtocolService {
   }
 
   /**
-   * ENCRYPT: Used by Seller during upload
-   * Encrypts file content with AES-256-GCM, then protects the key with Lit
-   * Returns data to be stored on-chain (litEncryptedKeyJson) and off-chain (ciphertext)
+   * ENCRYPT FILE (Used by Seller during upload)
+   * 
+   * Returns:
+   * - ciphertext: Base64 string to upload to Walrus
+   * - dataToEncryptHash: Hash to store on Sui (lit_data_hash field)
    */
-  async encryptContent(content: Uint8Array, listingId: string): Promise<EncryptionResult> {
+  async encryptFile(
+    file: File,
+    listingId: string,
+    packageId: string,
+    userAddress: string
+  ): Promise<EncryptionResult> {
     await this.connect();
     await this.ensureSession();
-
-    // Generate random 256-bit symmetric key
-    const symmetricKey = crypto.getRandomValues(new Uint8Array(32));
     
-    // Generate IV for AES-GCM
-    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const wallet = this.getBurnerWallet();
+    const session = this.getStoredSession()!;
     
-    // Import key for Web Crypto
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      symmetricKey,
-      { name: 'AES-GCM' },
-      false,
-      ['encrypt']
-    );
+    const authSig = {
+      sig: session.signature,
+      derivedVia: 'web3.eth.personal.sign',
+      signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
+      address: wallet.address,
+    };
     
-    // Encrypt content with AES-256-GCM
-    const contentBuffer = content.buffer.slice(
-      content.byteOffset, 
-      content.byteOffset + content.byteLength
-    ) as ArrayBuffer;
-    const encryptedData = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      cryptoKey,
-      contentBuffer
-    );
-    
-    // Combine IV + ciphertext
-    const ciphertext = new Uint8Array(iv.length + encryptedData.byteLength);
-    ciphertext.set(iv);
-    ciphertext.set(new Uint8Array(encryptedData), iv.length);
-    
-    // Create data hash from ciphertext
-    const hashBuffer = await crypto.subtle.digest('SHA-256', ciphertext);
-    const dataHash = Array.from(new Uint8Array(hashBuffer))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    
-    // Encrypt symmetric key with Lit Protocol
     const accessControlConditions = this.getAccessControlConditions();
-    const symmetricKeyBase64 = btoa(String.fromCharCode(...symmetricKey));
     
-    try {
-      // Use Lit to encrypt the symmetric key
-      const { ciphertext: litCiphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
-        {
-          accessControlConditions,
-          dataToEncrypt: symmetricKeyBase64,
-        },
-        this.litNodeClient!,
-      );
-
-      // This JSON string will be stored on-chain in lit_data_hash field
-      // Anyone with AccessPass can use this to decrypt via Lit Action
-      const litEncryptedKeyJson = JSON.stringify({
-        ciphertext: litCiphertext,
-        dataToEncryptHash,
+    // Read file content as text
+    const fileContent = await file.text();
+    
+    console.log('🔐 Encrypting file with Lit Protocol...', { listingId, fileSize: fileContent.length });
+    
+    // Encrypt using Lit Protocol
+    const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
+      {
         accessControlConditions,
-        listingId,
-        packageId: SUI_CONFIG.packageId,
-        createdAt: Date.now(),
-      });
-
-      // Clear symmetric key from memory
-      symmetricKey.fill(0);
-
-      console.log('✅ Encrypted content with Lit Protocol');
-      return {
-        ciphertext,
-        dataHash,
-        litEncryptedKeyJson,
-      };
-    } catch (litError) {
-      console.warn('⚠️ Lit encryptString failed, using fallback:', litError);
-      
-      // Fallback: store key directly (for demo purposes)
-      const litEncryptedKeyJson = JSON.stringify({
-        fallback: true,
-        key: symmetricKeyBase64,
-        listingId,
-        packageId: SUI_CONFIG.packageId,
-        createdAt: Date.now(),
-      });
-
-      symmetricKey.fill(0);
-
-      return {
-        ciphertext,
-        dataHash,
-        litEncryptedKeyJson,
-      };
-    }
+        dataToEncrypt: fileContent,
+      },
+      this.litNodeClient!,
+    );
+    
+    console.log('✅ File encrypted successfully');
+    console.log('📦 Ciphertext length:', ciphertext.length);
+    console.log('📦 dataToEncryptHash:', dataToEncryptHash);
+    
+    // Return separately:
+    // - ciphertext -> upload to Walrus
+    // - dataToEncryptHash -> store on Sui (lit_data_hash)
+    return {
+      ciphertext,
+      dataToEncryptHash,
+    };
   }
 
   /**
@@ -412,128 +349,72 @@ class LitProtocolService {
   }
 
   /**
-   * DECRYPT: Used by any user with valid AccessPass
-   * Fetches litEncryptedKeyJson from the listing (passed as param),
-   * verifies AccessPass ownership, then decrypts
+   * DECRYPT FILE (Used by Buyer to view content)
+   * 
+   * Parameters:
+   * - ciphertext: Base64 string fetched from Walrus
+   * - dataToEncryptHash: Hash fetched from Sui (lit_data_hash field)
+   * - listingId: ID of the listing
+   * - packageId: Sui package ID
+   * - userAddress: Buyer's wallet address
    */
-  async decryptContent(params: DecryptionParams): Promise<Uint8Array> {
+  async decryptFile(
+    ciphertext: string,        // From Walrus
+    dataToEncryptHash: string, // From Sui (lit_data_hash)
+    listingId: string,
+    packageId: string,
+    userAddress: string
+  ): Promise<string> {
     await this.connect();
     await this.ensureSession();
-
-    const { ciphertext, litEncryptedKeyJson, listingId, userAddress } = params;
     
-    console.log('🔐 Starting decryption for listing:', listingId);
+    console.log('🔐 Starting decryption...', {
+      ciphertextLength: ciphertext.length,
+      hash: dataToEncryptHash,
+      listingId,
+      userAddress,
+    });
 
     // First verify access via direct RPC
     const hasAccess = await this.verifyAccess(userAddress, listingId);
     if (!hasAccess) {
       throw new Error('Access denied: You do not have a valid AccessPass for this listing');
     }
-
-    // Parse the encrypted key data
-    let keyData: {
-      ciphertext?: string;
-      dataToEncryptHash?: string;
-      accessControlConditions?: unknown[];
-      fallback?: boolean;
-      key?: string;
+    
+    const wallet = this.getBurnerWallet();
+    const session = this.getStoredSession()!;
+    
+    const authSig = {
+      sig: session.signature,
+      derivedVia: 'web3.eth.personal.sign',
+      signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
+      address: wallet.address,
     };
-
+    
+    const accessControlConditions = this.getAccessControlConditions();
+    
     try {
-      keyData = JSON.parse(litEncryptedKeyJson);
-    } catch (e) {
-      throw new Error('Invalid encryption data format');
+      console.log('🔓 Decrypting with Lit Protocol...');
+      
+      const decryptedString = await LitJsSdk.decryptToString(
+        {
+          accessControlConditions,
+          chain: 'ethereum',
+          ciphertext,
+          dataToEncryptHash,
+          authSig,
+        },
+        this.litNodeClient!,
+      );
+      
+      console.log('✅ Decryption successful, content length:', decryptedString.length);
+      return decryptedString;
+    } catch (error: unknown) {
+      console.error('❌ Lit decryption failed:', error);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Decryption failed: ${message}`);
     }
-
-    let symmetricKeyBase64: string;
-
-    // Check if using fallback encryption (demo mode)
-    if (keyData.fallback && keyData.key) {
-      console.log('📦 Using fallback decryption');
-      symmetricKeyBase64 = keyData.key;
-    } else if (keyData.ciphertext && keyData.dataToEncryptHash && keyData.accessControlConditions) {
-      // Use Lit Protocol to decrypt the symmetric key
-      try {
-        const wallet = this.getBurnerWallet();
-        const session = this.getStoredSession();
-        
-        if (!session) {
-          throw new Error('No valid session');
-        }
-
-        // Generate auth signature
-        const authSig = {
-          sig: session.signature,
-          derivedVia: 'web3.eth.personal.sign',
-          signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
-          address: wallet.address,
-        };
-
-        console.log('🔓 Decrypting symmetric key with Lit Protocol...');
-
-        // Decrypt the symmetric key using Lit
-        symmetricKeyBase64 = await LitJsSdk.decryptToString(
-          {
-            accessControlConditions: keyData.accessControlConditions,
-            chain: 'ethereum',
-            ciphertext: keyData.ciphertext,
-            dataToEncryptHash: keyData.dataToEncryptHash,
-            authSig,
-          },
-          this.litNodeClient!,
-        );
-
-        console.log('✅ Symmetric key decrypted via Lit Protocol');
-      } catch (litError) {
-        console.error('❌ Lit decryption failed:', litError);
-        throw new Error('Failed to decrypt with Lit Protocol. Please ensure your AccessPass is valid.');
-      }
-    } else {
-      throw new Error('Invalid encryption data: missing required fields');
-    }
-
-    // Decode symmetric key from base64
-    const symmetricKey = new Uint8Array(
-      atob(symmetricKeyBase64).split('').map(c => c.charCodeAt(0))
-    );
-
-    // Extract IV from ciphertext
-    const iv = ciphertext.slice(0, 12);
-    const encryptedData = ciphertext.slice(12);
-
-    // Import key for Web Crypto
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      symmetricKey,
-      { name: 'AES-GCM' },
-      false,
-      ['decrypt']
-    );
-
-    // Decrypt content
-    const decryptedData = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv.buffer.slice(iv.byteOffset, iv.byteOffset + iv.byteLength) as ArrayBuffer },
-      cryptoKey,
-      encryptedData.buffer.slice(encryptedData.byteOffset, encryptedData.byteOffset + encryptedData.byteLength) as ArrayBuffer
-    );
-
-    // Clear symmetric key from memory
-    symmetricKey.fill(0);
-
-    console.log('✅ Content decrypted successfully');
-    return new Uint8Array(decryptedData);
-  }
-
-  /**
-   * Get session expiry time
-   */
-  getSessionExpiry(): Date | null {
-    const session = this.getStoredSession();
-    if (!session) return null;
-    return new Date(session.expiry);
   }
 }
 
-// Singleton instance
 export const litService = new LitProtocolService();
-export default litService;
