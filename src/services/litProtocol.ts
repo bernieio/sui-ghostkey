@@ -277,8 +277,9 @@ class LitProtocolService {
 
   /**
    * Verify access by checking AccessPass ownership on Sui
+   * Made public for ContentViewer access verification
    */
-  private async verifyAccess(userAddress: string, listingId: string): Promise<boolean> {
+  async verifyAccess(userAddress: string, listingId: string): Promise<boolean> {
     try {
       const response = await fetch(SUI_CONFIG.rpcUrl, {
         method: 'POST',
