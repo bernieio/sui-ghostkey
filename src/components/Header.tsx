@@ -12,10 +12,13 @@ import { Button } from '@/components/ui/button';
 import LitSessionIndicator from '@/components/LitSessionIndicator';
 import logo from '@/assets/phunhuanbuilder-logo.png';
 
+import { Info } from 'lucide-react';
+
 const navLinks = [
   { href: '/', label: 'Marketplace', icon: Store },
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/upload', label: 'Upload', icon: Upload },
+  { href: '/about', label: 'About', icon: Info },
 ];
 
 export function Header() {

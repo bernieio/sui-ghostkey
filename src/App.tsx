@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import Upload from "./pages/Upload";
 import ListingDetail from "./pages/ListingDetail";
 import ContentViewer from "./pages/ContentViewer";
+import About from "./pages/About";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +27,7 @@ const App = () => (
             <Route path="/upload" element={<Upload />} />
             <Route path="/listing/:id" element={<ListingDetail />} />
             <Route path="/view/:listingId" element={<ContentViewer />} />
+            <Route path="/about" element={<About />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

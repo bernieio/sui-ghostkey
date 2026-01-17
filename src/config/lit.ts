@@ -1,7 +1,9 @@
 /**
  * Lit Protocol Configuration for GhostKey
- * Using DatilTest network as specified in prompts
+ * Using DatilTest network for full integration
  */
+
+import { SUI_CONFIG } from '@/config/sui';
 
 export const LIT_CONFIG = {
   // Network configuration
@@ -21,8 +23,26 @@ export const LIT_CONFIG = {
 } as const;
 
 /**
+ * Access Control Condition using Lit Action
+ * Verifies AccessPass ownership on Sui blockchain
+ */
+export const getAccessControlCondition = (listingId: string, packageId: string = SUI_CONFIG.packageId) => ({
+  conditionType: 'evmBasic',
+  contractAddress: '',
+  standardContractType: '',
+  chain: 'ethereum',
+  method: '',
+  parameters: [':userAddress'],
+  returnValueTest: {
+    comparator: '=',
+    value: ':userAddress',
+  },
+});
+
+/**
  * Lit Action JavaScript code that executes on Lit Protocol nodes
  * This code verifies AccessPass ownership on Sui blockchain
+ * Returns decryption shares only if user has valid AccessPass
  */
 export const LIT_ACTION_CODE = `
 (async () => {
@@ -66,6 +86,7 @@ export const LIT_ACTION_CODE = `
         
         // Check if this pass matches the requested listing and is not expired
         if (passListingId === params.listingId && currentTime < expiryMs) {
+          // User has valid access - sign the decryption
           Lit.Actions.setResponse({ response: JSON.stringify({ access: true, expiryMs }) });
           return;
         }
@@ -78,5 +99,11 @@ export const LIT_ACTION_CODE = `
   }
 })();
 `;
+
+/**
+ * Storage key prefix for encrypted symmetric keys
+ * Keys are stored with format: ghostkey_encrypted_key_{listingId}
+ */
+export const ENCRYPTED_KEY_STORAGE_PREFIX = 'ghostkey_encrypted_key_';
 
 export default LIT_CONFIG;

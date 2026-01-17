@@ -12,6 +12,7 @@ const links = {
     { label: 'Marketplace', href: '/' },
     { label: 'Dashboard', href: '/dashboard' },
     { label: 'Upload', href: '/upload' },
+    { label: 'About', href: '/about' },
   ],
   resources: [
     { label: 'Sui Blockchain', href: 'https://sui.io', external: true },

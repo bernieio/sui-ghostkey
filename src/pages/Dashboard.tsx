@@ -4,7 +4,7 @@
  */
 
 import { useCurrentAccount } from '@mysten/dapp-kit';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { 
   LayoutDashboard, 
@@ -56,6 +56,7 @@ const StatCard = ({
 
 const Dashboard = () => {
   const account = useCurrentAccount();
+  const queryClient = useQueryClient();
   
   const { data: listings, isLoading, error } = useQuery({
     queryKey: ['seller-listings', account?.address],
@@ -238,7 +239,7 @@ const Dashboard = () => {
                                   <ListingActions 
                                     listing={listing} 
                                     onSuccess={() => {
-                                      // Trigger refetch
+                                      queryClient.invalidateQueries({ queryKey: ['seller-listings', account?.address] });
                                     }}
                                   />
                                 </td>
