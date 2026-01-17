@@ -1,6 +1,6 @@
 /**
  * Listing Actions Component
- * Provides Withdraw, Pause/Resume, and other actions for seller's listings
+ * Provides Withdraw, Pause/Resume, Update Pricing, and Transfer actions
  */
 
 import { useState } from 'react';
@@ -15,6 +15,9 @@ import {
   Copy,
   Check,
   Loader2,
+  DollarSign,
+  Send,
+  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -40,6 +43,8 @@ import {
   buildWithdrawTx,
   buildPauseListingTx,
   buildResumeListingTx,
+  buildUpdatePricingTx,
+  buildTransferListingTx,
 } from '@/services/suiClient';
 import { formatSui } from '@/lib/utils';
 import type { ListingWithMeta } from '@/types/marketplace';
@@ -53,12 +58,22 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [showPricingModal, setShowPricingModal] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  
   const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [newBasePrice, setNewBasePrice] = useState('');
+  const [newSlope, setNewSlope] = useState('');
+  const [transferAddress, setTransferAddress] = useState('');
+  const [confirmTransfer, setConfirmTransfer] = useState(false);
+  
   const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const balanceSui = Number(listing.balance) / 1_000_000_000;
   const hasBalance = Number(listing.balance) > 0;
+  const currentBasePriceSui = Number(listing.basePrice) / 1_000_000_000;
+  const currentSlopeMist = Number(listing.priceSlope);
 
   // Handle withdraw
   const handleWithdraw = async () => {
@@ -108,6 +123,69 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
     }
   };
 
+  // Handle update pricing
+  const handleUpdatePricing = async () => {
+    if (!newBasePrice || !newSlope || isProcessing) return;
+
+    const basePriceMist = BigInt(Math.floor(parseFloat(newBasePrice) * 1_000_000_000));
+    const slopeMist = BigInt(parseInt(newSlope));
+
+    if (basePriceMist <= 0n) {
+      toast.error('Base price must be greater than 0');
+      return;
+    }
+
+    if (slopeMist >= basePriceMist) {
+      toast.error('Slope must be less than base price');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const tx = buildUpdatePricingTx(listing.objectId, basePriceMist, slopeMist);
+      await signAndExecute({ transaction: tx });
+      
+      toast.success('Pricing updated successfully!');
+      setShowPricingModal(false);
+      setNewBasePrice('');
+      setNewSlope('');
+      onSuccess?.();
+    } catch (error) {
+      console.error('Update pricing error:', error);
+      toast.error('Failed to update pricing');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Handle transfer ownership
+  const handleTransfer = async () => {
+    if (!transferAddress || !confirmTransfer || isProcessing) return;
+
+    // Basic address validation
+    if (!transferAddress.startsWith('0x') || transferAddress.length !== 66) {
+      toast.error('Invalid Sui address');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const tx = buildTransferListingTx(listing.objectId, transferAddress);
+      await signAndExecute({ transaction: tx });
+      
+      toast.success('Listing transferred successfully!');
+      setShowTransferModal(false);
+      setTransferAddress('');
+      setConfirmTransfer(false);
+      onSuccess?.();
+    } catch (error) {
+      console.error('Transfer error:', error);
+      toast.error('Failed to transfer listing');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // Copy listing URL
   const handleCopyUrl = async () => {
     const url = `${window.location.origin}/listing/${listing.objectId}`;
@@ -115,6 +193,13 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
     toast.success('Link copied to clipboard');
+  };
+
+  // Open pricing modal with current values
+  const openPricingModal = () => {
+    setNewBasePrice(currentBasePriceSui.toString());
+    setNewSlope(currentSlopeMist.toString());
+    setShowPricingModal(true);
   };
 
   return (
@@ -156,6 +241,11 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
             Withdraw ({formatSui(listing.balance)})
           </DropdownMenuItem>
 
+          <DropdownMenuItem onClick={openPricingModal}>
+            <DollarSign className="h-4 w-4 mr-2" />
+            Update Pricing
+          </DropdownMenuItem>
+
           <DropdownMenuItem onClick={handleToggleActive}>
             {listing.isActive ? (
               <>
@@ -168,6 +258,16 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
                 Resume Listing
               </>
             )}
+          </DropdownMenuItem>
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem 
+            onClick={() => setShowTransferModal(true)}
+            className="text-destructive focus:text-destructive"
+          >
+            <Send className="h-4 w-4 mr-2" />
+            Transfer Ownership
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -247,6 +347,199 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
                       <>
                         <Wallet className="h-4 w-4 mr-2" />
                         Withdraw
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
+
+      {/* Update Pricing Modal */}
+      <AnimatePresence>
+        {showPricingModal && (
+          <Dialog open={showPricingModal} onOpenChange={setShowPricingModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <DollarSign className="h-5 w-5 text-primary" />
+                    Update Pricing
+                  </DialogTitle>
+                  <DialogDescription>
+                    Adjust the base price and price slope for your listing.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="py-4 space-y-4">
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <p className="text-sm text-muted-foreground">Current Price</p>
+                    <p className="text-2xl font-bold text-primary">
+                      {formatSui(listing.currentPrice)} SUI/hour
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Active Rentals: {listing.activeRentals.toString()}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="basePrice">Base Price (SUI/hour)</Label>
+                    <Input
+                      id="basePrice"
+                      type="number"
+                      step="0.001"
+                      min="0.000001"
+                      value={newBasePrice}
+                      onChange={(e) => setNewBasePrice(e.target.value)}
+                      placeholder="0.01"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="slope">Price Slope (MIST per rental)</Label>
+                    <Input
+                      id="slope"
+                      type="number"
+                      min="0"
+                      value={newSlope}
+                      onChange={(e) => setNewSlope(e.target.value)}
+                      placeholder="1000"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Must be less than base price. 1 SUI = 1,000,000,000 MIST
+                    </p>
+                  </div>
+
+                  <div className="bg-primary/5 border border-primary/20 rounded-lg p-3">
+                    <p className="text-sm text-muted-foreground">
+                      <strong>Preview:</strong> New price = {newBasePrice || '0'} SUI + ({listing.activeRentals.toString()} × {newSlope || '0'} MIST)
+                    </p>
+                  </div>
+                </div>
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowPricingModal(false)}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpdatePricing}
+                    disabled={!newBasePrice || !newSlope || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      <>
+                        <DollarSign className="h-4 w-4 mr-2" />
+                        Update Pricing
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
+
+      {/* Transfer Ownership Modal */}
+      <AnimatePresence>
+        {showTransferModal && (
+          <Dialog open={showTransferModal} onOpenChange={setShowTransferModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-destructive">
+                    <AlertTriangle className="h-5 w-5" />
+                    Transfer Ownership
+                  </DialogTitle>
+                  <DialogDescription>
+                    This action cannot be undone. You will lose control of this listing.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="py-4 space-y-4">
+                  <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
+                    <p className="text-sm text-destructive font-medium">
+                      ⚠️ Warning: Transferring ownership is permanent. The new owner will:
+                    </p>
+                    <ul className="text-sm text-muted-foreground mt-2 list-disc list-inside space-y-1">
+                      <li>Have full control over the listing</li>
+                      <li>Receive all future earnings</li>
+                      <li>Be able to pause, update, or transfer the listing</li>
+                    </ul>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="newOwner">New Owner Address</Label>
+                    <Input
+                      id="newOwner"
+                      value={transferAddress}
+                      onChange={(e) => setTransferAddress(e.target.value)}
+                      placeholder="0x..."
+                      className="font-mono text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Enter the full Sui address of the new owner
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="confirmTransfer"
+                      checked={confirmTransfer}
+                      onChange={(e) => setConfirmTransfer(e.target.checked)}
+                      className="rounded border-destructive"
+                    />
+                    <Label htmlFor="confirmTransfer" className="text-sm text-muted-foreground">
+                      I understand this action is irreversible
+                    </Label>
+                  </div>
+                </div>
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowTransferModal(false);
+                      setTransferAddress('');
+                      setConfirmTransfer(false);
+                    }}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleTransfer}
+                    disabled={!transferAddress || !confirmTransfer || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Transferring...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4 mr-2" />
+                        Transfer Ownership
                       </>
                     )}
                   </Button>
