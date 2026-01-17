@@ -135,30 +135,37 @@ const Upload = () => {
     setError(null);
 
     try {
-      // Step 1: Encrypt file
+      // Step 1: Encrypt file with Lit Protocol
       updateProcessingStep('encrypt', 'processing');
-      const fileBytes = await readFileAsBytes(form.file);
       
       await litService.connect();
       await litService.ensureSession();
       
       const tempListingId = `temp_${Date.now()}`;
-      const encryptionResult = await litService.encryptContent(fileBytes, tempListingId);
+      // encryptFile returns { ciphertext, dataToEncryptHash }
+      const encryptionResult = await litService.encryptFile(
+        form.file,
+        tempListingId,
+        (await import('@/config/sui')).SUI_CONFIG.packageId,
+        account.address
+      );
       updateProcessingStep('encrypt', 'complete');
 
-      // Step 2: Upload to Walrus
+      // Step 2: Upload ciphertext to Walrus
       updateProcessingStep('upload', 'processing');
-      const walrusResult = await uploadToWalrus(encryptionResult.ciphertext);
+      // Convert base64 ciphertext to Uint8Array for Walrus upload
+      const ciphertextBytes = Uint8Array.from(atob(encryptionResult.ciphertext), c => c.charCodeAt(0));
+      const walrusResult = await uploadToWalrus(ciphertextBytes);
       updateProcessingStep('upload', 'complete');
 
       // Step 3: Deploy smart contract
-      // litEncryptedKeyJson is stored on-chain in lit_data_hash field
-      // This allows any AccessPass holder to decrypt the content
+      // Store dataToEncryptHash on-chain (lit_data_hash field)
+      // This allows any AccessPass holder to decrypt when combined with ciphertext from Walrus
       updateProcessingStep('deploy', 'processing');
       
       const tx = buildCreateListingTx(
         walrusResult.blobId,
-        encryptionResult.litEncryptedKeyJson, // Store Lit encryption data on-chain
+        encryptionResult.dataToEncryptHash, // Only store hash on Sui, not ciphertext
         parseFloat(form.basePrice),
         parseInt(form.priceSlope),
         form.file.type || 'application/octet-stream'

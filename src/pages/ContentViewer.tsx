@@ -116,32 +116,40 @@ const ContentViewer = () => {
         );
       }
       
-      // Fetch encrypted content from Walrus
-      console.log('📥 Fetching from Walrus:', blobId);
+      // Fetch ciphertext from Walrus
+      console.log('📥 Fetching ciphertext from Walrus:', blobId);
       const encryptedData = await fetchFromWalrus(blobId);
-
-      // Get the Lit encryption data from the listing (stored on-chain in lit_data_hash)
-      // This allows ANY user with valid AccessPass to decrypt, not just the uploader
-      const litEncryptedKeyJson = listing.litDataHash;
       
-      if (!litEncryptedKeyJson || litEncryptedKeyJson === 'undefined' || litEncryptedKeyJson.trim() === '') {
+      // Convert Uint8Array to base64 string for Lit Protocol
+      const ciphertextBase64 = btoa(String.fromCharCode(...encryptedData));
+
+      // Get dataToEncryptHash from the listing (stored on-chain in lit_data_hash)
+      const dataToEncryptHash = listing.litDataHash;
+      
+      if (!dataToEncryptHash || dataToEncryptHash === 'undefined' || dataToEncryptHash.trim() === '') {
         throw new Error(
-          'Encryption data (lit_data_hash) is missing from this listing. ' +
+          'Encryption hash (lit_data_hash) is missing from this listing. ' +
           'The content may have been uploaded with an older version.'
         );
       }
       
-      console.log('🔐 Decrypting with on-chain Lit data...');
+      console.log('🔐 Decrypting with Lit Protocol...', {
+        ciphertextLength: ciphertextBase64.length,
+        hash: dataToEncryptHash,
+      });
       
       // Decrypt content using Lit Protocol
-      // The litEncryptedKeyJson contains all data needed to decrypt via Lit Action
-      const decrypted = await litService.decryptContent({
-        ciphertext: encryptedData,
-        litEncryptedKeyJson: litEncryptedKeyJson,
+      // ciphertext from Walrus + dataToEncryptHash from Sui = decrypted content
+      const decryptedContent = await litService.decryptFile(
+        ciphertextBase64,        // Ciphertext from Walrus (base64)
+        dataToEncryptHash,       // Hash from Sui (lit_data_hash)
         listingId,
-        userAddress: account.address,
-      });
+        (await import('@/config/sui')).SUI_CONFIG.packageId,
+        account.address
+      );
 
+      // Convert decrypted string to Uint8Array for processing
+      const decrypted = new TextEncoder().encode(decryptedContent);
       processDecryptedContent(decrypted, listing.mimeType);
       setViewState('viewing');
       setTimeRemaining(VIEW_TIMEOUT_SECONDS);
