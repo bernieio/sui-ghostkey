@@ -26,6 +26,8 @@ import { fetchSellerListings } from '@/services/suiClient';
 import { formatSui, truncateAddress } from '@/lib/utils';
 import AccessPassList from '@/components/AccessPassList';
 import ListingActions from '@/components/ListingActions';
+import RevenueChart from '@/components/RevenueChart';
+import { useMarketplaceEvents } from '@/hooks/useSuiEvents';
 
 const StatCard = ({ 
   title, 
@@ -57,6 +59,11 @@ const StatCard = ({
 const Dashboard = () => {
   const account = useCurrentAccount();
   const queryClient = useQueryClient();
+  
+  // Subscribe to real-time marketplace events
+  useMarketplaceEvents({
+    enabled: !!account?.address,
+  });
   
   const { data: listings, isLoading, error } = useQuery({
     queryKey: ['seller-listings', account?.address],
@@ -148,6 +155,9 @@ const Dashboard = () => {
                   description="Available to withdraw"
                 />
               </div>
+
+              {/* Revenue Analytics */}
+              <RevenueChart className="mb-8" />
 
               {/* Loading State */}
               {isLoading && (

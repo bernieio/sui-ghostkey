@@ -262,4 +262,132 @@ export function buildResumeListingTx(listingId: string): Transaction {
   return tx;
 }
 
+/**
+ * Build transaction to update pricing
+ */
+export function buildUpdatePricingTx(
+  listingId: string,
+  newBasePriceMist: bigint,
+  newSlopeMist: bigint
+): Transaction {
+  const tx = new Transaction();
+  
+  tx.moveCall({
+    target: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::update_pricing`,
+    arguments: [
+      tx.object(listingId),
+      tx.pure.u64(newBasePriceMist),
+      tx.pure.u64(newSlopeMist),
+    ],
+  });
+  
+  return tx;
+}
+
+/**
+ * Build transaction to transfer listing ownership
+ */
+export function buildTransferListingTx(
+  listingId: string,
+  newOwner: string
+): Transaction {
+  const tx = new Transaction();
+  
+  tx.moveCall({
+    target: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::transfer_listing`,
+    arguments: [
+      tx.object(listingId),
+      tx.pure.address(newOwner),
+    ],
+  });
+  
+  return tx;
+}
+
+/**
+ * Build transaction to decay expired rentals
+ */
+export function buildDecayRentalsTx(
+  listingId: string,
+  expiryMsList: bigint[]
+): Transaction {
+  const tx = new Transaction();
+  
+  tx.moveCall({
+    target: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::decay_active_rentals`,
+    arguments: [
+      tx.object(listingId),
+      tx.pure.vector('u64', expiryMsList),
+      tx.object(SUI_CONFIG.clockObjectId),
+    ],
+  });
+  
+  return tx;
+}
+
+/**
+ * Subscribe to marketplace events
+ */
+export async function subscribeToEvents(
+  eventType: string,
+  callback: (event: unknown) => void
+): Promise<() => void> {
+  const unsubscribe = await suiClient.subscribeEvent({
+    filter: {
+      MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::${eventType}`,
+    },
+    onMessage: callback,
+  });
+  
+  return unsubscribe;
+}
+
+/**
+ * Fetch rental events for a listing (for revenue charts)
+ */
+export async function fetchRentalEvents(listingId?: string): Promise<{
+  listingId: string;
+  buyer: string;
+  pricePaid: bigint;
+  hours: bigint;
+  timestamp: number;
+}[]> {
+  try {
+    const response = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::AccessRented`,
+      },
+      limit: 100,
+      order: 'descending',
+    });
+
+    const events = response.data
+      .filter(event => {
+        if (!listingId) return true;
+        const parsed = event.parsedJson as { listing_id: string };
+        return parsed.listing_id === listingId;
+      })
+      .map(event => {
+        const parsed = event.parsedJson as {
+          listing_id: string;
+          buyer: string;
+          price_paid: string;
+          hours: string;
+        };
+        return {
+          listingId: parsed.listing_id,
+          buyer: parsed.buyer,
+          pricePaid: BigInt(parsed.price_paid),
+          hours: BigInt(parsed.hours),
+          timestamp: Number(event.timestampMs),
+        };
+      });
+
+    return events;
+  } catch (error) {
+    console.error('Error fetching rental events:', error);
+    return [];
+  }
+}
+
 export default suiClient;
