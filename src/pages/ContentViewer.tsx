@@ -100,9 +100,24 @@ const ContentViewer = () => {
 
       setViewState('loading');
 
+      // Validate walrusBlobId before fetching
+      const blobId = listing.walrusBlobId;
+      console.log('📥 Listing data:', { 
+        objectId: listing.objectId,
+        walrusBlobId: blobId,
+        mimeType: listing.mimeType 
+      });
+      
+      if (!blobId || blobId === 'undefined' || blobId.trim() === '') {
+        throw new Error(
+          'Walrus blob ID is missing from this listing. ' +
+          'The content may not have been uploaded correctly, or there is a data parsing issue.'
+        );
+      }
+      
       // Fetch encrypted content from Walrus
-      console.log('📥 Fetching from Walrus:', listing.walrusBlobId);
-      const encryptedData = await fetchFromWalrus(listing.walrusBlobId);
+      console.log('📥 Fetching from Walrus:', blobId);
+      const encryptedData = await fetchFromWalrus(blobId);
 
       // Get encryption key from localStorage (stored during upload)
       // Try multiple key patterns for compatibility

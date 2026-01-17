@@ -91,19 +91,38 @@ export async function uploadToWalrus(
 
 /**
  * Retrieve content from Walrus by blob ID
+ * Walrus HTTP API: GET /v1/blobs/{blobId}
+ * See: https://docs.wal.app/docs/usage/web-api
  */
 export async function fetchFromWalrus(blobId: string): Promise<Uint8Array> {
+  // Validate blobId before making request
+  if (!blobId || blobId === 'undefined' || blobId.trim() === '') {
+    console.error('❌ fetchFromWalrus called with invalid blobId:', blobId);
+    throw new Error('Invalid blob ID: cannot fetch content without a valid Walrus blob ID');
+  }
+  
+  const url = getWalrusBlobUrl(blobId);
+  console.log('🌊 Walrus fetch URL:', url);
+  
   try {
-    const response = await fetch(getWalrusBlobUrl(blobId));
+    const response = await fetch(url);
     
     if (!response.ok) {
-      throw new Error(`Walrus fetch failed: ${response.statusText}`);
+      const errorText = await response.text().catch(() => '');
+      console.error('❌ Walrus fetch failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        url,
+        error: errorText,
+      });
+      throw new Error(`Walrus fetch failed: ${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ''}`);
     }
     
     const buffer = await response.arrayBuffer();
+    console.log('✅ Walrus fetch successful, size:', buffer.byteLength, 'bytes');
     return new Uint8Array(buffer);
   } catch (error) {
-    console.error('Walrus fetch error:', error);
+    console.error('❌ Walrus fetch error:', error);
     throw error;
   }
 }
