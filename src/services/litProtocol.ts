@@ -18,24 +18,36 @@ export interface EncryptionResult {
   dataToEncryptHash: string;
 }
 
-// Helper: Convert Base64 to Hex String (Fix "Failed to hex decode")
-// Lit SDK decrypt expects Hex string for ciphertext in some versions
+// --- HELPERS ---
+
+/**
+ * Chuyển Base64 thành Hex string.
+ * Lit SDK V6 decrypt bắt buộc dùng Hex, nhưng encrypt lại trả về Base64.
+ */
 function base64ToHex(base64: string): string {
   try {
-    const raw = atob(base64);
+    // Xóa khoảng trắng/newline nếu có từ Walrus
+    const cleanBase64 = base64.trim();
+
+    // Nếu đã là Hex (chỉ chứa 0-9, a-f) thì trả về luôn
+    if (/^[0-9a-fA-F]+$/.test(cleanBase64)) {
+      return cleanBase64;
+    }
+
+    const raw = atob(cleanBase64);
     let result = "";
     for (let i = 0; i < raw.length; i++) {
-      const hex = raw.charCodeAt(i).toString(16);
-      result += hex.length === 2 ? hex : "0" + hex;
+      const hex = raw.charCodeAt(i).toString(16).padStart(2, "0");
+      result += hex;
     }
     return result;
   } catch (e) {
-    // If not valid base64, assume it is already hex or raw string
+    console.warn("Failed to convert Base64 to Hex, returning original:", e);
     return base64;
   }
 }
 
-// LIT ACTION CODE
+// LIT ACTION: Verify Ownership on Sui
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
@@ -89,6 +101,7 @@ class LitProtocolService {
   private burnerWallet: ethers.Wallet | null = null;
   private isConnecting: boolean = false;
 
+  // --- CONNECTION ---
   async connect(): Promise<LitNodeClient> {
     if (this.litNodeClient?.ready) return this.litNodeClient;
 
@@ -114,6 +127,7 @@ class LitProtocolService {
     }
   }
 
+  // --- ACCESS CONTROL CONDITIONS ---
   private getUnifiedAccessControlConditions() {
     return [
       {
@@ -130,6 +144,7 @@ class LitProtocolService {
     ];
   }
 
+  // --- SESSION & WALLET ---
   private getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) return this.burnerWallet;
     const storedKey = localStorage.getItem(BURNER_WALLET_KEY);
@@ -200,6 +215,8 @@ Expiration Time: ${expiration}`;
     return sessionData;
   }
 
+  // --- PUBLIC METHODS ---
+
   getSessionExpiry(): number | null {
     const session = this.getStoredSession();
     return session ? session.expiry : null;
@@ -220,7 +237,7 @@ Expiration Time: ${expiration}`;
     return true;
   }
 
-  // ENCRYPT
+  // --- ENCRYPT ---
   async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
     const session = await this.ensureSession();
@@ -247,7 +264,7 @@ Expiration Time: ${expiration}`;
     return { ciphertext, dataToEncryptHash };
   }
 
-  // DECRYPT
+  // --- DECRYPT ---
   async decryptFile(
     ciphertext: string,
     dataToEncryptHash: string,
@@ -265,21 +282,15 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
+    // FIX: Luôn luôn chuyển đổi ciphertext sang Hex trước khi gửi đi
+    const hexCiphertext = base64ToHex(ciphertext);
+
     const accessControlConditions = this.getUnifiedAccessControlConditions();
-
-    // FIX: Try to handle both Base64 and Hex ciphertext
-    // Lit might be picky, so let's try raw first, if fail, try to fix format
-    // But here we just assume it might need specific format.
-
-    // NOTE: If ciphertext comes from `LitJsSdk.encryptString`, it is Base64.
-    // If `decryptToString` throws "hex decode" error, it means it expects Hex.
-    // Let's try to pass it as is first, if error, we catch and retry with Hex conversion.
-    // Or better, assume V6 wants it as is, but we need to ensure the INPUT string is clean.
 
     const params: any = {
       accessControlConditions,
       chain: "ethereum",
-      ciphertext,
+      ciphertext: hexCiphertext, // Sử dụng Hex String
       dataToEncryptHash,
       authSig,
       litActionCode: LIT_ACTION_VERIFY_ACCESS,
@@ -290,34 +301,20 @@ Expiration Time: ${expiration}`;
       },
     };
 
+    console.log("🔓 Decrypting with Hex Ciphertext (len):", hexCiphertext.length);
+
     try {
       const decryptedString = await LitJsSdk.decryptToString(params, this.litNodeClient!);
       return decryptedString;
     } catch (error: any) {
-      console.error("Lit Decrypt Attempt 1 Failed:", error);
+      console.error("Lit Decrypt Failed:", error);
 
-      // Auto-recover: Invalid Auth Sig -> Retry with new session
+      // Auto-recover from invalid auth sig
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
         console.warn("AuthSig invalid, regenerating session...");
         localStorage.removeItem(SESSION_KEY);
-        // Recursive retry (Use `this.` to ensure context)
-        // Note: Be careful of infinite loop, but auth logic should prevent it
+        // Recursive retry once
         return this.decryptFile(ciphertext, dataToEncryptHash, listingId, packageId, userAddress);
-      }
-
-      // Auto-recover: Failed to hex decode -> Try converting Base64 to Hex
-      if (error.message?.includes("hex decode") || error.message?.includes("invalid hex")) {
-        console.warn("Hex decode error detected. Attempting Base64 -> Hex conversion...");
-        const hexCiphertext = base64ToHex(ciphertext);
-
-        const retryParams = { ...params, ciphertext: hexCiphertext };
-
-        try {
-          return await LitJsSdk.decryptToString(retryParams, this.litNodeClient!);
-        } catch (retryError) {
-          console.error("Retry with Hex also failed:", retryError);
-          throw retryError;
-        }
       }
 
       throw error;
