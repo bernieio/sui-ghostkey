@@ -3,25 +3,25 @@
  * With links and branding
  */
 
-import { Link } from 'react-router-dom';
-import { Github, Twitter, ExternalLink } from 'lucide-react';
-import logo from '@/assets/phunhuanbuilder-logo.png';
+import { Link } from "react-router-dom";
+import { Github, Twitter, ExternalLink } from "lucide-react";
+import logo from "@/assets/phunhuanbuilder-logo.png";
 
 const links = {
   product: [
-    { label: 'Marketplace', href: '/' },
-    { label: 'Dashboard', href: '/dashboard' },
-    { label: 'Upload', href: '/upload' },
-    { label: 'About', href: '/about' },
+    { label: "Marketplace", href: "/" },
+    { label: "Dashboard", href: "/dashboard" },
+    { label: "Upload", href: "/upload" },
+    { label: "About", href: "/about" },
   ],
   resources: [
-    { label: 'Sui Blockchain', href: 'https://sui.io', external: true },
-    { label: 'Lit Protocol', href: 'https://litprotocol.com', external: true },
-    { label: 'Walrus Storage', href: 'https://walrus.xyz', external: true },
+    { label: "Sui Blockchain", href: "https://sui.io", external: true },
+    { label: "Lit Protocol", href: "https://litprotocol.com", external: true },
+    { label: "Walrus Storage", href: "https://walrus.xyz", external: true },
   ],
   social: [
-    { icon: Github, href: 'https://github.com/phunhuanbuilder', label: 'GitHub' },
-    { icon: Twitter, href: 'https://twitter.com/phunhuanbuilder', label: 'Twitter' },
+    { icon: Github, href: "https://github.com/phunhuanbuilder", label: "GitHub" },
+    { icon: Twitter, href: "https://twitter.com/phunhuanbuilder", label: "Twitter" },
   ],
 };
 
@@ -40,8 +40,8 @@ export function Footer() {
               </div>
             </Link>
             <p className="text-sm text-muted-foreground max-w-sm mb-4">
-              Decentralized marketplace for AI prompts and digital assets. 
-              Encrypted storage, time-limited access, trustless transactions.
+              Decentralized marketplace for AI prompts and digital assets. Encrypted storage, time-limited access,
+              trustless transactions.
             </p>
             <div className="flex items-center gap-4">
               {links.social.map((social) => {
@@ -68,10 +68,7 @@ export function Footer() {
             <ul className="space-y-2">
               {links.product.map((link) => (
                 <li key={link.href}>
-                  <Link
-                    to={link.href}
-                    className="text-sm text-muted-foreground hover:text-primary transition-colors"
-                  >
+                  <Link to={link.href} className="text-sm text-muted-foreground hover:text-primary transition-colors">
                     {link.label}
                   </Link>
                 </li>
@@ -102,12 +99,10 @@ export function Footer() {
 
         {/* Bottom Bar */}
         <div className="mt-12 pt-8 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-muted-foreground">
-            © 2024 Phú Nhuận Builder. Built for Sui Hackathon.
-          </p>
+          <p className="text-sm text-muted-foreground">© 2026 Phú Nhuận Builder. Built for Sui Hackathon.</p>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span>Deployed on</span>
-            <a 
+            <a
               href="https://testnet.suivision.xyz/package/0x2aa4851e0a844e82880968c26c559e637ec475ffa9375318dae1f3a330d3075c"
               target="_blank"
               rel="noopener noreferrer"
