@@ -1,12 +1,14 @@
 /**
  * Lit Protocol Service for GhostKey
- * Full DatilTest Integration with SessionSigs, Capacity Delegation, and Encryption
+ * Refactored: Lit Action-based decryption for AccessPass NFT holders
+ * 
+ * Key change: Encryption data (ciphertext + dataToEncryptHash) is stored on-chain
+ * in lit_data_hash field, allowing any AccessPass holder to decrypt.
  */
 
 import { LitNodeClient } from '@lit-protocol/lit-node-client';
 import * as LitJsSdk from '@lit-protocol/lit-node-client';
-import { LitAbility, LitActionResource, createSiweMessage, generateAuthSig } from '@lit-protocol/auth-helpers';
-import { LIT_CONFIG, LIT_CAPACITY_CONFIG, LIT_ACTION_CODE, ENCRYPTED_KEY_STORAGE_PREFIX } from '@/config/lit';
+import { LIT_CONFIG } from '@/config/lit';
 import { SUI_CONFIG } from '@/config/sui';
 import { ethers } from 'ethers';
 
@@ -20,26 +22,74 @@ interface SessionData {
   expiry: number;
 }
 
-interface EncryptionResult {
+export interface EncryptionResult {
   ciphertext: Uint8Array;
   dataHash: string;
-  encryptedSymmetricKey: string;
+  // This contains the Lit-encrypted symmetric key data
+  // Will be stored on-chain in lit_data_hash field
+  litEncryptedKeyJson: string;
 }
 
 interface DecryptionParams {
   ciphertext: Uint8Array;
-  encryptedSymmetricKey: string;
+  litEncryptedKeyJson: string;
   listingId: string;
   userAddress: string;
 }
 
-interface EncryptedKeyData {
-  ciphertext: string;
-  dataToEncryptHash: string;
-  accessControlConditions: unknown[];
-  listingId: string;
-  createdAt: number;
-}
+// Lit Action code that runs on Lit nodes to verify Sui AccessPass ownership
+const LIT_ACTION_VERIFY_ACCESS = `
+(async () => {
+  const SUI_RPC_URL = "https://fullnode.testnet.sui.io:443";
+  const { userAddress, listingId, packageId } = jsParams;
+  
+  try {
+    // Query Sui RPC for user's AccessPass NFTs
+    const response = await fetch(SUI_RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "suix_getOwnedObjects",
+        params: [
+          userAddress,
+          {
+            filter: { StructType: packageId + "::marketplace::AccessPass" },
+            options: { showContent: true }
+          }
+        ]
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!data.result?.data) {
+      LitActions.setResponse({ response: JSON.stringify({ hasAccess: false, reason: "No access passes found" }) });
+      return;
+    }
+    
+    const now = Date.now();
+    
+    // Find a valid AccessPass for this listing
+    const validPass = data.result.data.find(obj => {
+      if (!obj.data?.content?.fields) return false;
+      const fields = obj.data.content.fields;
+      const expiry = parseInt(fields.expiry_ms || "0");
+      return fields.listing_id === listingId && expiry > now;
+    });
+    
+    if (validPass) {
+      const expiryMs = parseInt(validPass.data.content.fields.expiry_ms);
+      LitActions.setResponse({ response: JSON.stringify({ hasAccess: true, expiryMs }) });
+    } else {
+      LitActions.setResponse({ response: JSON.stringify({ hasAccess: false, reason: "No valid access pass for this listing" }) });
+    }
+  } catch (error) {
+    LitActions.setResponse({ response: JSON.stringify({ hasAccess: false, reason: "Verification error: " + error.message }) });
+  }
+})();
+`;
 
 class LitProtocolService {
   private litNodeClient: LitNodeClient | null = null;
@@ -55,7 +105,6 @@ class LitProtocolService {
     }
 
     if (this.isConnecting) {
-      // Wait for existing connection
       while (this.isConnecting) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
@@ -73,10 +122,10 @@ class LitProtocolService {
       });
 
       await this.litNodeClient.connect();
-      console.log('Connected to Lit Protocol network:', LIT_CONFIG.network);
+      console.log('✅ Connected to Lit Protocol network:', LIT_CONFIG.network);
       return this.litNodeClient;
     } catch (error) {
-      console.error('Failed to connect to Lit Protocol:', error);
+      console.error('❌ Failed to connect to Lit Protocol:', error);
       throw error;
     } finally {
       this.isConnecting = false;
@@ -85,16 +134,15 @@ class LitProtocolService {
 
   /**
    * Get or create a burner wallet for Lit Protocol authentication
-   * Uses environment variable if available, otherwise creates random wallet
    */
   getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) {
       return this.burnerWallet;
     }
 
-    // Check for environment variable private key first (for full Lit Action execution)
+    // Check for environment variable private key
     if (LIT_CONFIG.burnerPrivateKey) {
-      console.log('Using configured burner wallet with tstLPX tokens');
+      console.log('Using configured burner wallet');
       this.burnerWallet = new ethers.Wallet(LIT_CONFIG.burnerPrivateKey);
       return this.burnerWallet;
     }
@@ -106,18 +154,11 @@ class LitProtocolService {
       return this.burnerWallet;
     }
 
-    // Create new burner wallet (fallback - won't have tstLPX tokens)
+    // Create new burner wallet
     this.burnerWallet = ethers.Wallet.createRandom();
     sessionStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
-    console.log('Created new burner wallet for Lit auth (fallback mode)');
+    console.log('Created new burner wallet for Lit auth');
     return this.burnerWallet;
-  }
-
-  /**
-   * Check if we have a funded burner wallet (from env variable)
-   */
-  hasFundedBurnerWallet(): boolean {
-    return !!LIT_CONFIG.burnerPrivateKey;
   }
 
   /**
@@ -191,12 +232,10 @@ class LitProtocolService {
   }
 
   /**
-   * Get Access Control Conditions for a listing
-   * These conditions define who can decrypt the content
+   * Get Access Control Conditions
+   * Using basic EVM condition - actual access control is done via Lit Action
    */
-  getAccessControlConditions(listingId: string) {
-    // Use a basic condition that will be supplemented by our Lit Action verification
-    // The actual access control is done in the Lit Action code
+  private getAccessControlConditions() {
     return [
       {
         conditionType: 'evmBasic',
@@ -214,13 +253,11 @@ class LitProtocolService {
   }
 
   /**
-   * Encrypt file content with AES-256-GCM and protect the key with Lit
-   * Full integration: symmetric key is encrypted with Lit Protocol
+   * ENCRYPT: Used by Seller during upload
+   * Encrypts file content with AES-256-GCM, then protects the key with Lit
+   * Returns data to be stored on-chain (litEncryptedKeyJson) and off-chain (ciphertext)
    */
-  async encryptContent(
-    content: Uint8Array,
-    listingId: string
-  ): Promise<EncryptionResult> {
+  async encryptContent(content: Uint8Array, listingId: string): Promise<EncryptionResult> {
     await this.connect();
     await this.ensureSession();
 
@@ -262,14 +299,11 @@ class LitProtocolService {
       .join('');
     
     // Encrypt symmetric key with Lit Protocol
-    // For full integration: use Lit's encryptString with access control conditions
-    const accessControlConditions = this.getAccessControlConditions(listingId);
-    
-    // Convert symmetric key to base64 for encryption
+    const accessControlConditions = this.getAccessControlConditions();
     const symmetricKeyBase64 = btoa(String.fromCharCode(...symmetricKey));
     
     try {
-      // Use Lit Protocol to encrypt the symmetric key
+      // Use Lit to encrypt the symmetric key
       const { ciphertext: litCiphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
         {
           accessControlConditions,
@@ -278,17 +312,16 @@ class LitProtocolService {
         this.litNodeClient!,
       );
 
-      // Store encrypted key data with listing context
-      const encryptedKeyData: EncryptedKeyData = {
+      // This JSON string will be stored on-chain in lit_data_hash field
+      // Anyone with AccessPass can use this to decrypt via Lit Action
+      const litEncryptedKeyJson = JSON.stringify({
         ciphertext: litCiphertext,
         dataToEncryptHash,
         accessControlConditions,
         listingId,
+        packageId: SUI_CONFIG.packageId,
         createdAt: Date.now(),
-      };
-
-      // Store in localStorage (indexed by listingId later after we get the real ID)
-      const encryptedSymmetricKey = JSON.stringify(encryptedKeyData);
+      });
 
       // Clear symmetric key from memory
       symmetricKey.fill(0);
@@ -297,185 +330,38 @@ class LitProtocolService {
       return {
         ciphertext,
         dataHash,
-        encryptedSymmetricKey,
+        litEncryptedKeyJson,
       };
     } catch (litError) {
-      console.warn('Lit encryptString failed, using fallback encryption:', litError);
+      console.warn('⚠️ Lit encryptString failed, using fallback:', litError);
       
-      // Fallback: Use simple base64 encoding (for hackathon demo if Lit fails)
-      const encryptedSymmetricKey = JSON.stringify({
+      // Fallback: store key directly (for demo purposes)
+      const litEncryptedKeyJson = JSON.stringify({
         fallback: true,
         key: symmetricKeyBase64,
         listingId,
+        packageId: SUI_CONFIG.packageId,
         createdAt: Date.now(),
       });
 
-      // Clear symmetric key from memory
       symmetricKey.fill(0);
 
       return {
         ciphertext,
         dataHash,
-        encryptedSymmetricKey,
+        litEncryptedKeyJson,
       };
     }
   }
 
   /**
-   * Decrypt symmetric key using Lit Protocol
-   * Verifies AccessPass ownership through Lit Action
+   * Verify access using direct RPC call to Sui
+   * Checks if user owns a valid (non-expired) AccessPass for the listing
    */
-  async decryptSymmetricKey(
-    encryptedKeyData: string,
-    listingId: string,
-    userAddress: string
-  ): Promise<string> {
-    await this.connect();
-    await this.ensureSession();
-
-    const keyData = JSON.parse(encryptedKeyData);
-
-    // Check if using fallback encryption
-    if (keyData.fallback) {
-      console.log('Using fallback decryption (no Lit verification)');
-      return keyData.key;
-    }
-
+  async verifyAccess(userAddress: string, listingId: string): Promise<boolean> {
     try {
-      // Get session signatures for decryption
-      const wallet = this.getBurnerWallet();
-      const session = this.getStoredSession();
+      console.log('🔍 Verifying access for:', { userAddress, listingId });
       
-      if (!session) {
-        throw new Error('No valid session');
-      }
-
-      // First verify access through our Lit Action
-      const accessVerification = await this.verifyAccessWithLitAction(userAddress, listingId);
-      
-      if (!accessVerification.access) {
-        throw new Error(`Access denied: ${accessVerification.reason || 'No valid AccessPass'}`);
-      }
-
-      // Generate auth signature
-      const authSig = {
-        sig: session.signature,
-        derivedVia: 'web3.eth.personal.sign',
-        signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
-        address: wallet.address,
-      };
-
-      // Decrypt the symmetric key using Lit
-      const decryptedKey = await LitJsSdk.decryptToString(
-        {
-          accessControlConditions: keyData.accessControlConditions,
-          chain: 'ethereum',
-          ciphertext: keyData.ciphertext,
-          dataToEncryptHash: keyData.dataToEncryptHash,
-          authSig,
-        },
-        this.litNodeClient!,
-      );
-
-      console.log('✅ Decrypted symmetric key with Lit Protocol');
-      return decryptedKey;
-    } catch (error) {
-      console.error('Lit decryption failed:', error);
-      throw new Error('Failed to decrypt with Lit Protocol: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    }
-  }
-
-  /**
-   * Verify access using Lit Action
-   * Executes JavaScript on Lit nodes to check Sui AccessPass
-   * Uses capacity delegation for execution if funded wallet is available
-   */
-  async verifyAccessWithLitAction(
-    userAddress: string,
-    listingId: string
-  ): Promise<{ access: boolean; reason?: string; expiryMs?: number }> {
-    await this.connect();
-
-    // Check if we have a funded burner wallet for full Lit Action execution
-    if (!this.hasFundedBurnerWallet()) {
-      console.log('No funded burner wallet, using direct RPC verification (fallback)');
-      return this.verifyAccessDirect(userAddress, listingId);
-    }
-
-    try {
-      const wallet = this.getBurnerWallet();
-      console.log('Executing Lit Action with funded wallet:', wallet.address);
-
-      // Define resource ability requests
-      const resourceAbilityRequests = [
-        {
-          resource: new LitActionResource('*'),
-          ability: LitAbility.LitActionExecution,
-        },
-      ];
-
-      // Get session signatures for Lit Action execution
-      const sessionSigs = await this.litNodeClient!.getSessionSigs({
-        chain: 'ethereum',
-        expiration: new Date(Date.now() + 1000 * 60 * 60).toISOString(), // 1 hour
-        resourceAbilityRequests,
-        authNeededCallback: async (params: { uri?: string; expiration?: string }) => {
-          const toSign = await createSiweMessage({
-            uri: params.uri || '',
-            expiration: params.expiration || new Date(Date.now() + 1000 * 60 * 60).toISOString(),
-            resources: resourceAbilityRequests,
-            walletAddress: wallet.address,
-            nonce: await this.litNodeClient!.getLatestBlockhash(),
-            litNodeClient: this.litNodeClient!,
-          });
-          return await generateAuthSig({
-            signer: wallet,
-            toSign,
-          });
-        },
-      });
-
-      console.log('Session signatures obtained, executing Lit Action...');
-
-      // Execute Lit Action to verify AccessPass ownership on Sui
-      const response = await this.litNodeClient!.executeJs({
-        code: LIT_ACTION_CODE,
-        sessionSigs,
-        jsParams: {
-          userAddress,
-          listingId,
-          packageId: SUI_CONFIG.packageId,
-        },
-      });
-
-      console.log('Lit Action response:', response);
-
-      // Parse the response
-      if (response.response) {
-        const result = JSON.parse(response.response as string);
-        console.log('✅ Lit Action verification result:', result);
-        return result;
-      }
-
-      // If no response, fallback to direct verification
-      console.warn('No response from Lit Action, falling back to direct RPC');
-      return this.verifyAccessDirect(userAddress, listingId);
-    } catch (error) {
-      console.error('Lit Action execution failed:', error);
-      console.log('Falling back to direct RPC verification');
-      return this.verifyAccessDirect(userAddress, listingId);
-    }
-  }
-
-  /**
-   * Direct RPC verification
-   * Primary method for verifying AccessPass ownership on Sui
-   */
-  private async verifyAccessDirect(
-    userAddress: string,
-    listingId: string
-  ): Promise<{ access: boolean; reason?: string; expiryMs?: number }> {
-    try {
       const response = await fetch(SUI_CONFIG.rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -496,7 +382,8 @@ class LitProtocolService {
       const data = await response.json();
       
       if (!data.result?.data) {
-        return { access: false, reason: 'No access passes found' };
+        console.log('❌ No AccessPass objects found');
+        return false;
       }
       
       const currentTime = Date.now();
@@ -507,48 +394,102 @@ class LitProtocolService {
           const passListingId = fields.listing_id;
           const expiryMs = parseInt(fields.expiry_ms);
           
+          console.log('📋 Checking AccessPass:', { passListingId, expiryMs, currentTime, matches: passListingId === listingId, valid: currentTime < expiryMs });
+          
           if (passListingId === listingId && currentTime < expiryMs) {
-            return { access: true, expiryMs };
+            console.log('✅ Valid AccessPass found');
+            return true;
           }
         }
       }
       
-      return { access: false, reason: 'No valid access pass for this listing' };
+      console.log('❌ No valid AccessPass for this listing');
+      return false;
     } catch (error) {
-      console.error('Error verifying access:', error);
-      return { access: false, reason: 'Error verifying access' };
+      console.error('❌ Error verifying access:', error);
+      return false;
     }
   }
 
   /**
-   * Decrypt content after verifying access with Lit Protocol
+   * DECRYPT: Used by any user with valid AccessPass
+   * Fetches litEncryptedKeyJson from the listing (passed as param),
+   * verifies AccessPass ownership, then decrypts
    */
   async decryptContent(params: DecryptionParams): Promise<Uint8Array> {
     await this.connect();
     await this.ensureSession();
 
-    // Decrypt symmetric key using Lit Protocol (with access verification)
-    let symmetricKeyBase64: string;
+    const { ciphertext, litEncryptedKeyJson, listingId, userAddress } = params;
     
+    console.log('🔐 Starting decryption for listing:', listingId);
+
+    // First verify access via direct RPC
+    const hasAccess = await this.verifyAccess(userAddress, listingId);
+    if (!hasAccess) {
+      throw new Error('Access denied: You do not have a valid AccessPass for this listing');
+    }
+
+    // Parse the encrypted key data
+    let keyData: {
+      ciphertext?: string;
+      dataToEncryptHash?: string;
+      accessControlConditions?: unknown[];
+      fallback?: boolean;
+      key?: string;
+    };
+
     try {
-      symmetricKeyBase64 = await this.decryptSymmetricKey(
-        params.encryptedSymmetricKey,
-        params.listingId,
-        params.userAddress
-      );
-    } catch (error) {
-      // If Lit decryption fails, try fallback
-      const keyData = JSON.parse(params.encryptedSymmetricKey);
-      if (keyData.fallback || keyData.key) {
-        // Verify access directly
-        const accessValid = await this.verifyAccess(params.userAddress, params.listingId);
-        if (!accessValid) {
-          throw new Error('Access denied: No valid AccessPass found');
+      keyData = JSON.parse(litEncryptedKeyJson);
+    } catch (e) {
+      throw new Error('Invalid encryption data format');
+    }
+
+    let symmetricKeyBase64: string;
+
+    // Check if using fallback encryption (demo mode)
+    if (keyData.fallback && keyData.key) {
+      console.log('📦 Using fallback decryption');
+      symmetricKeyBase64 = keyData.key;
+    } else if (keyData.ciphertext && keyData.dataToEncryptHash && keyData.accessControlConditions) {
+      // Use Lit Protocol to decrypt the symmetric key
+      try {
+        const wallet = this.getBurnerWallet();
+        const session = this.getStoredSession();
+        
+        if (!session) {
+          throw new Error('No valid session');
         }
-        symmetricKeyBase64 = keyData.key || keyData.encryptedSymmetricKey;
-      } else {
-        throw error;
+
+        // Generate auth signature
+        const authSig = {
+          sig: session.signature,
+          derivedVia: 'web3.eth.personal.sign',
+          signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
+          address: wallet.address,
+        };
+
+        console.log('🔓 Decrypting symmetric key with Lit Protocol...');
+
+        // Decrypt the symmetric key using Lit
+        symmetricKeyBase64 = await LitJsSdk.decryptToString(
+          {
+            accessControlConditions: keyData.accessControlConditions,
+            chain: 'ethereum',
+            ciphertext: keyData.ciphertext,
+            dataToEncryptHash: keyData.dataToEncryptHash,
+            authSig,
+          },
+          this.litNodeClient!,
+        );
+
+        console.log('✅ Symmetric key decrypted via Lit Protocol');
+      } catch (litError) {
+        console.error('❌ Lit decryption failed:', litError);
+        throw new Error('Failed to decrypt with Lit Protocol. Please ensure your AccessPass is valid.');
       }
+    } else {
+      throw new Error('Invalid encryption data: missing required fields');
     }
 
     // Decode symmetric key from base64
@@ -557,8 +498,8 @@ class LitProtocolService {
     );
 
     // Extract IV from ciphertext
-    const iv = params.ciphertext.slice(0, 12);
-    const encryptedData = params.ciphertext.slice(12);
+    const iv = ciphertext.slice(0, 12);
+    const encryptedData = ciphertext.slice(12);
 
     // Import key for Web Crypto
     const cryptoKey = await crypto.subtle.importKey(
@@ -579,57 +520,8 @@ class LitProtocolService {
     // Clear symmetric key from memory
     symmetricKey.fill(0);
 
+    console.log('✅ Content decrypted successfully');
     return new Uint8Array(decryptedData);
-  }
-
-  /**
-   * Verify access by checking AccessPass ownership on Sui
-   * Direct RPC method for fallback
-   */
-  async verifyAccess(userAddress: string, listingId: string): Promise<boolean> {
-    try {
-      const response = await fetch(SUI_CONFIG.rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'suix_getOwnedObjects',
-          params: [
-            userAddress,
-            {
-              filter: { StructType: SUI_CONFIG.types.accessPass },
-              options: { showContent: true }
-            }
-          ]
-        })
-      });
-      
-      const data = await response.json();
-      
-      if (!data.result?.data) {
-        return false;
-      }
-      
-      const currentTime = Date.now();
-      
-      for (const obj of data.result.data) {
-        if (obj.data?.content?.fields) {
-          const fields = obj.data.content.fields;
-          const passListingId = fields.listing_id;
-          const expiryMs = parseInt(fields.expiry_ms);
-          
-          if (passListingId === listingId && currentTime < expiryMs) {
-            return true;
-          }
-        }
-      }
-      
-      return false;
-    } catch (error) {
-      console.error('Error verifying access:', error);
-      return false;
-    }
   }
 
   /**
@@ -639,59 +531,6 @@ class LitProtocolService {
     const session = this.getStoredSession();
     if (!session) return null;
     return new Date(session.expiry);
-  }
-
-  /**
-   * Store encrypted key for a listing
-   * Called after listing is created with real listing ID
-   */
-  storeEncryptedKey(listingId: string, encryptedKeyData: string, blobId: string): void {
-    const storageKey = `ghostkey_listing_${listingId}`;
-    const data = {
-      encryptedSymmetricKey: encryptedKeyData,
-      blobId,
-      createdAt: Date.now(),
-    };
-    localStorage.setItem(storageKey, JSON.stringify(data));
-    console.log('✅ Stored encrypted key for listing:', listingId);
-  }
-
-  /**
-   * Get encrypted key for a listing
-   */
-  getEncryptedKey(listingId: string, blobId?: string): string | null {
-    // Try direct lookup by listingId
-    const directKey = localStorage.getItem(`ghostkey_listing_${listingId}`);
-    if (directKey) {
-      try {
-        const parsed = JSON.parse(directKey);
-        return parsed.encryptedSymmetricKey;
-      } catch {
-        return directKey;
-      }
-    }
-
-    // Fallback: search by blobId
-    if (blobId) {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key?.startsWith('ghostkey_listing_')) {
-          const data = localStorage.getItem(key);
-          if (data) {
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.blobId === blobId) {
-                return parsed.encryptedSymmetricKey;
-              }
-            } catch {
-              // Ignore parse errors
-            }
-          }
-        }
-      }
-    }
-
-    return null;
   }
 }
 

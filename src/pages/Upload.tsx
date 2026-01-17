@@ -152,11 +152,13 @@ const Upload = () => {
       updateProcessingStep('upload', 'complete');
 
       // Step 3: Deploy smart contract
+      // litEncryptedKeyJson is stored on-chain in lit_data_hash field
+      // This allows any AccessPass holder to decrypt the content
       updateProcessingStep('deploy', 'processing');
       
       const tx = buildCreateListingTx(
         walrusResult.blobId,
-        encryptionResult.dataHash,
+        encryptionResult.litEncryptedKeyJson, // Store Lit encryption data on-chain
         parseFloat(form.basePrice),
         parseInt(form.priceSlope),
         form.file.type || 'application/octet-stream'
@@ -187,14 +189,6 @@ const Upload = () => {
       
       setListingId(newListingId);
       updateProcessingStep('deploy', 'complete');
-      
-      // Store encrypted symmetric key locally (for hackathon demo)
-      // Key is stored with the listing object ID for lookup in ContentViewer
-      localStorage.setItem(`ghostkey_listing_${newListingId}`, JSON.stringify({
-        encryptedSymmetricKey: encryptionResult.encryptedSymmetricKey,
-        blobId: walrusResult.blobId,
-        createdAt: Date.now(),
-      }));
       
       console.log('✅ Listing created successfully:', { 
         listingId: newListingId, 
