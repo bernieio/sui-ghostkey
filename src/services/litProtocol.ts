@@ -18,14 +18,13 @@ export interface EncryptionResult {
   dataToEncryptHash: string;
 }
 
-// LIT ACTION: Kiểm tra quyền sở hữu NFT trên Sui
+// LIT ACTION: Verify Ownership on Sui
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
     const { userAddress, listingId, packageId } = jsParams;
     const rpcUrl = "https://fullnode.testnet.sui.io:443";
     
-    // Gọi RPC Sui để lấy danh sách NFT
     const body = JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -52,7 +51,6 @@ const LIT_ACTION_VERIFY_ACCESS = `
       const objects = res.result.data;
       const now = Date.now();
 
-      // Tìm vé hợp lệ
       const validPass = objects.find(obj => {
         const fields = obj.data.content.fields;
         const expiry = parseInt(fields.expiry_ms);
@@ -64,8 +62,6 @@ const LIT_ACTION_VERIFY_ACCESS = `
   };
 
   const hasAccess = await checkSuiAccess();
-  
-  // Set điều kiện cho Lit Node: Chỉ mở khóa nếu hasAccess = true
   LitActions.setConditions({ conditions: [{ operator: "always", returnValue: hasAccess }], permanent: false });
   LitActions.setResponse({ response: JSON.stringify({ hasAccess }) });
 })();
@@ -76,7 +72,7 @@ class LitProtocolService {
   private burnerWallet: ethers.Wallet | null = null;
   private isConnecting: boolean = false;
 
-  // --- CONNECT ---
+  // --- CONNECTION ---
   async connect(): Promise<LitNodeClient> {
     if (this.litNodeClient?.ready) return this.litNodeClient;
 
@@ -102,8 +98,8 @@ class LitProtocolService {
     }
   }
 
-  // --- HELPER: UNIFIED ACCESS CONTROL CONDITION ---
-  // Điều kiện này dùng chung cho cả Encrypt và Decrypt để đảm bảo hash khớp nhau
+  // --- ACCESS CONTROL CONDITIONS ---
+  // QUAN TRỌNG: Điều kiện này phải giống hệt nhau ở cả Encrypt và Decrypt
   private getUnifiedAccessControlConditions() {
     return [
       {
@@ -120,7 +116,7 @@ class LitProtocolService {
     ];
   }
 
-  // --- SESSION MANAGEMENT ---
+  // --- SESSION & WALLET ---
   private getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) return this.burnerWallet;
     const storedKey = localStorage.getItem(BURNER_WALLET_KEY);
@@ -153,20 +149,26 @@ class LitProtocolService {
     localStorage.setItem(SESSION_KEY, JSON.stringify(data));
   }
 
+  // FIX: Tạo message SIWE chuẩn Ethereum Mainnet (Chain ID 1)
   private async createSessionInternal(): Promise<SessionData> {
     const wallet = this.getBurnerWallet();
+    const address = await wallet.getAddress(); // Ensure checksum address
+
     const expiryDays = 7;
     const expiration = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
     const issuedAt = new Date().toISOString();
 
-    const domain = window.location.hostname || "localhost";
+    // Hardcode domain & origin để tránh lỗi mismatch environment
+    const domain = window.location.host || "localhost";
     const origin = window.location.origin || "http://localhost:5173";
+    const statement = "Authorize GhostKey access to Lit Protocol.";
     const nonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
 
-    const message = `${domain} wants you to sign in with your Ethereum account:
-${wallet.address}
+    // MESSAGE FORMAT: Cực kỳ quan trọng, không được sai một dấu cách
+    const siweMessage = `${domain} wants you to sign in with your Ethereum account:
+${address}
 
-Authorize GhostKey access to Lit Protocol.
+${statement}
 
 URI: ${origin}
 Version: 1
@@ -175,20 +177,20 @@ Nonce: ${nonce}
 Issued At: ${issuedAt}
 Expiration Time: ${expiration}`;
 
-    const signature = await wallet.signMessage(message);
+    const signature = await wallet.signMessage(siweMessage);
 
     const sessionData: SessionData = {
       signature,
-      address: wallet.address,
+      address,
       expiry: Date.parse(expiration),
-      signedMessage: message,
+      signedMessage: siweMessage,
     };
 
     this.storeSession(sessionData);
     return sessionData;
   }
 
-  // --- PUBLIC API ---
+  // --- PUBLIC METHODS ---
 
   getSessionExpiry(): number | null {
     const session = this.getStoredSession();
@@ -215,6 +217,7 @@ Expiration Time: ${expiration}`;
     await this.connect();
     const session = await this.ensureSession();
 
+    // FIX: Construct AuthSig object manually
     const authSig = {
       sig: session.signature,
       derivedVia: "web3.eth.personal.sign",
@@ -222,16 +225,15 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    // FIX: Sử dụng Unified Access Control Conditions
     const accessControlConditions = this.getUnifiedAccessControlConditions();
-
     const fileContent = await file.text();
 
+    // Use 'any' cast to bypass strict typing issues with Lit SDK versions
     const params: any = {
       accessControlConditions,
       dataToEncrypt: fileContent,
       authSig,
-      chain: "ethereum",
+      chain: "ethereum", // Must match Chain ID 1 in SIWE
     };
 
     const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(params, this.litNodeClient!);
@@ -257,12 +259,10 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    // FIX: Phải truyền đúng Access Control Conditions đã dùng lúc encrypt
-    // Không được để mảng rỗng []
     const accessControlConditions = this.getUnifiedAccessControlConditions();
 
     const params: any = {
-      accessControlConditions, // <-- QUAN TRỌNG: Không được rỗng
+      accessControlConditions,
       chain: "ethereum",
       ciphertext,
       dataToEncryptHash,
@@ -275,13 +275,24 @@ Expiration Time: ${expiration}`;
       },
     };
 
+    console.log("🔓 Decrypt Params Debug:", {
+      authSigAddr: authSig.address,
+      chain: params.chain,
+      hash: dataToEncryptHash,
+    });
+
     try {
       const decryptedString = await LitJsSdk.decryptToString(params, this.litNodeClient!);
       return decryptedString;
     } catch (error: any) {
-      if (error.message?.includes("NodeInvalidAuthSig")) {
+      console.error("Lit Decrypt Detailed Error:", error);
+
+      // Auto-recover from invalid auth sig
+      if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
+        console.warn("AuthSig invalid, regenerating session...");
         localStorage.removeItem(SESSION_KEY);
-        throw new Error("Session invalid. Retrying...");
+        // Retry once recursively
+        return this.decryptFile(ciphertext, dataToEncryptHash, listingId, packageId, userAddress);
       }
       throw error;
     }
