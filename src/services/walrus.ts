@@ -26,9 +26,8 @@ function getUploadUrl(epochs: number): string {
     return `/api/walrus-upload?epochs=${epochs}`;
   }
   
-  // In development, try direct (may fail due to CORS)
-  // You can also set up a local proxy or use the Vercel dev server
-  return `${WALRUS_CONFIG.publisherUrl}/v1/store?epochs=${epochs}`;
+  // In development, use the correct Walrus API endpoint: /v1/blobs
+  return `${WALRUS_CONFIG.publisherUrl}/v1/blobs?epochs=${epochs}`;
 }
 
 export async function uploadToWalrus(
