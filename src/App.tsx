@@ -17,7 +17,8 @@ const App = () => (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Index />} />
-        <Route path="/create" element={<Upload />} />
+        {/* FIX: Đổi từ /create thành /upload để khớp với URL bạn muốn */}
+        <Route path="/upload" element={<Upload />} />
         <Route path="/listing/:id" element={<ListingDetail />} />
         <Route path="/view/:id" element={<ContentViewer />} />
         <Route path="/dashboard" element={<Dashboard />} />
