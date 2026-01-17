@@ -1,42 +1,44 @@
 import { WALRUS_CONFIG } from "@/config/walrus";
 
 /**
- * Upload dữ liệu lên Walrus (String -> Blob ID)
+ * Upload thông qua Vercel Proxy để tránh CORS
  */
 export const uploadToWalrus = async (data: string, mimeType: string = "text/plain"): Promise<string> => {
-  let lastError: any;
+  try {
+    console.log("🚀 Uploading to Walrus via Proxy...");
 
-  // Sử dụng WALRUS_CONFIG.PUBLISHERS
-  for (const publisherUrl of WALRUS_CONFIG.PUBLISHERS) {
-    try {
-      console.log(`📡 Uploading to node: ${publisherUrl}`);
+    // Gọi về API Route của chính mình
+    const response = await fetch("/api/walrus-upload", {
+      method: "POST",
+      body: data, // Gửi Hex String
+      headers: {
+        "Content-Type": "text/plain",
+      },
+    });
 
-      const response = await fetch(`${publisherUrl}/v1/store?epochs=${WALRUS_CONFIG.DEFAULT_EPOCHS}`, {
-        method: "PUT",
-        body: data,
-        headers: { "Content-Type": mimeType },
-      });
-
-      if (!response.ok) throw new Error(`Status ${response.status}`);
-
-      const result = await response.json();
-
-      if (result.newlyCreated?.blobObject?.blobId) {
-        return result.newlyCreated.blobObject.blobId;
-      } else if (result.alreadyCertified?.blobId) {
-        return result.alreadyCertified.blobId;
-      }
-      throw new Error("Invalid response from Walrus");
-    } catch (error) {
-      console.warn(`⚠️ Failed ${publisherUrl}:`, error);
-      lastError = error;
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(`Upload failed: ${err.error || response.statusText}`);
     }
+
+    const result = await response.json();
+
+    if (result.newlyCreated?.blobObject?.blobId) {
+      return result.newlyCreated.blobObject.blobId;
+    } else if (result.alreadyCertified?.blobId) {
+      return result.alreadyCertified.blobId;
+    }
+
+    throw new Error("Invalid response format from Walrus Proxy");
+  } catch (error) {
+    console.error("Walrus Proxy Error:", error);
+    throw error;
   }
-  throw lastError || new Error("All publishers failed");
 };
 
 /**
- * Tải dữ liệu từ Walrus (Blob ID -> String)
+ * Fetch trực tiếp từ Aggregator (Thường Aggregator cho phép CORS GET)
+ * Nếu cần thiết cũng có thể proxy nốt cái này, nhưng thử trực tiếp trước cho nhanh.
  */
 export const fetchFromWalrus = async (blobId: string): Promise<string> => {
   let lastError: any;
@@ -50,10 +52,10 @@ export const fetchFromWalrus = async (blobId: string): Promise<string> => {
         throw new Error(`Status ${response.status}`);
       }
 
-      // Luôn trả về Text (Vì chúng ta lưu Hex String)
+      // Trả về Text (Hex String)
       return await response.text();
     } catch (error) {
-      console.warn(`⚠️ Fetch failed ${aggregatorUrl}:`, error);
+      console.warn(`Fetch failed ${aggregatorUrl}:`, error);
       lastError = error;
     }
   }

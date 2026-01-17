@@ -1,4 +1,4 @@
-import "./polyfills"; // <--- BẮT BUỘC PHẢI Ở DÒNG 1
+import "./polyfills"; // BẮT BUỘC Ở DÒNG 1
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";

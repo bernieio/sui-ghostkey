@@ -1,6 +1,5 @@
 import { Buffer } from "buffer";
 
-// Polyfill Buffer cho môi trường Browser
 // @ts-ignore
 if (typeof window !== "undefined") {
   // @ts-ignore
