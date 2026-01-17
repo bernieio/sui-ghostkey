@@ -26,6 +26,7 @@ import { TrendingUp, BarChart3, PieChart as PieChartIcon, Loader2 } from 'lucide
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { fetchRentalEvents, fetchSellerListings } from '@/services/suiClient';
+import { SUI_CONFIG } from '@/config/sui';
 import { formatSui, truncateAddress } from '@/lib/utils';
 
 const COLORS = ['hsl(var(--primary))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
@@ -43,6 +44,7 @@ const RevenueChart = ({ className }: RevenueChartProps) => {
     queryFn: () => fetchSellerListings(account?.address || ''),
     enabled: !!account?.address,
     staleTime: 30 * 1000,
+    refetchInterval: SUI_CONFIG.pollingIntervalMs, // Poll for updates
   });
 
   // Fetch rental events
@@ -50,6 +52,7 @@ const RevenueChart = ({ className }: RevenueChartProps) => {
     queryKey: ['rental-events'],
     queryFn: () => fetchRentalEvents(),
     staleTime: 60 * 1000,
+    refetchInterval: SUI_CONFIG.pollingIntervalMs, // Poll for updates
   });
 
   // Filter events for seller's listings

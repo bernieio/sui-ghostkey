@@ -3,7 +3,7 @@
  * Provides blockchain interaction for listings and access passes
  */
 
-import { SuiClient, SuiHTTPTransport } from '@mysten/sui/client';
+import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { SUI_CONFIG, suiToMist } from '@/config/sui';
 import type { ListingWithMeta, AccessPass } from '@/types/marketplace';
@@ -11,20 +11,11 @@ import type { ListingWithMeta, AccessPass } from '@/types/marketplace';
 // Re-export types for backward compatibility
 export type { ListingWithMeta, AccessPass };
 
-const WS_RPC_BY_NETWORK: Record<typeof SUI_CONFIG.network, string> = {
-  testnet: 'wss://rpc.testnet.sui.io:443',
-};
-
-// Initialize Sui client.
-// IMPORTANT: HTTP RPC uses fullnode.* but WebSocket subscriptions should use rpc.*
+// Initialize Sui client - HTTP only mode
+// WebSocket subscriptions are disabled due to public node limitations
+// Data freshness is handled by React Query polling
 export const suiClient = new SuiClient({
-  transport: new SuiHTTPTransport({
-    url: SUI_CONFIG.rpcUrl,
-    websocket: {
-      url: WS_RPC_BY_NETWORK[SUI_CONFIG.network],
-      reconnectTimeout: 1000,
-    },
-  }),
+  url: SUI_CONFIG.rpcUrl,
 });
 
 export default suiClient;
@@ -386,31 +377,25 @@ export function buildDecayRentalsTx(listingId: string, expiryMsList: bigint[]): 
 
 /**
  * Subscribe to blockchain events
- * NOTE: Sui testnet public fullnode has limited WebSocket support.
- * This function will fail gracefully if WebSocket is not available.
- * Use polling-based approach (React Query refetch) as primary method.
+ * NOTE: WebSocket subscriptions are DISABLED in HTTP-only mode.
+ * Data freshness is handled by React Query polling (refetchInterval).
+ * 
+ * This function is kept for API compatibility but returns no-op immediately
+ * when enableWebsocketSubscriptions is false.
  */
 export async function subscribeToEvents(
-  eventType: string,
-  callback: (event: unknown) => void
+  _eventType: string,
+  _callback: (event: unknown) => void
 ): Promise<() => void> {
-  try {
-    const unsubscribe = await suiClient.subscribeEvent({
-      filter: {
-        MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::${eventType}`,
-      },
-      onMessage: callback,
-    });
-    
-    return unsubscribe;
-  } catch (error) {
-    // WebSocket subscription failed - this is expected on public Sui nodes
-    // Log warning but don't throw - app will use polling via React Query instead
-    console.warn(`WebSocket subscription for ${eventType} not available (this is normal on public nodes)`);
-    
-    // Return a no-op unsubscribe function
+  // HTTP-only mode: WebSocket subscriptions are disabled
+  if (!SUI_CONFIG.enableWebsocketSubscriptions) {
+    console.debug('[Sui] WebSocket disabled (HTTP-only mode). Using React Query polling for data freshness.');
     return () => {};
   }
+  
+  // WebSocket mode would go here if enabled
+  // Currently disabled - return no-op
+  return () => {};
 }
 
 /**

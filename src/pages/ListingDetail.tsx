@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
 import { motion } from 'framer-motion';
 import { 
@@ -37,6 +37,7 @@ const ListingDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const account = useCurrentAccount();
+  const queryClient = useQueryClient();
   const { mutateAsync: signAndExecute, isPending: isTxPending } = useSignAndExecuteTransaction();
   
   const [rentalHours, setRentalHours] = useState(24);
@@ -49,6 +50,7 @@ const ListingDetail = () => {
     queryFn: () => fetchListing(id!),
     enabled: !!id,
     staleTime: 30 * 1000,
+    refetchInterval: SUI_CONFIG.pollingIntervalMs, // Poll for updates
   });
 
   // Calculate rental cost
@@ -70,6 +72,13 @@ const ListingDetail = () => {
       );
 
       await signAndExecute({ transaction: tx });
+      
+      // Invalidate queries to refresh data immediately
+      queryClient.invalidateQueries({ queryKey: ['listing', id] });
+      queryClient.invalidateQueries({ queryKey: ['user-access-passes', account.address] });
+      queryClient.invalidateQueries({ queryKey: ['rental-events'] });
+      queryClient.invalidateQueries({ queryKey: ['seller-listings'] });
+      
       setTxStatus('success');
     } catch (err) {
       console.error('Rent error:', err);

@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { SUI_CONFIG } from '@/config/sui';
 import { fetchUserAccessPasses, fetchListing } from '@/services/suiClient';
 import type { AccessPass } from '@/types/marketplace';
 
@@ -156,6 +157,7 @@ const AccessPassList = () => {
     },
     enabled: !!account?.address,
     staleTime: 30000,
+    refetchInterval: SUI_CONFIG.pollingIntervalMs, // Poll for updates
   });
 
   // Separate active and expired passes
