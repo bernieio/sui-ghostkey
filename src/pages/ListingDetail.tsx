@@ -7,21 +7,20 @@ import { Listing } from "@/types/marketplace";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Loader2, Tag, ShieldCheck, ArrowLeft } from "lucide-react";
+import { Loader2, Tag, ShieldCheck, ArrowLeft, Coins } from "lucide-react";
 
 const ListingDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const suiClient = useSuiClient();
   const account = useCurrentAccount();
-
-  // FIX 1: Updated Hook Name for latest dapp-kit
   const { mutate: signAndExecute } = useSignAndExecuteTransaction();
 
   const [listing, setListing] = useState<Listing | null>(null);
   const [loading, setLoading] = useState(true);
   const [renting, setRenting] = useState(false);
 
+  // 1. FETCH DATA & MAP FIELDS (Quan trọng nhất)
   useEffect(() => {
     const fetchListing = async () => {
       if (!id) return;
@@ -34,20 +33,25 @@ const ListingDetail = () => {
         if (obj.data?.content?.dataType === "moveObject") {
           const fields = obj.data.content.fields as any;
 
-          // FIX 2: Mapping snake_case (Contract) -> camelCase (Frontend Interface)
-          // Fixes TS2353 & TS2551 errors
-          setListing({
+          // MAPPING: Từ Sui (snake_case) -> Frontend (camelCase)
+          // Đây là bước sửa lỗi TS2353 và TS2551
+          const mappedListing: Listing = {
             id: obj.data.objectId,
             seller: fields.seller,
-            basePrice: fields.base_price, // Map base_price -> basePrice
-            priceSlope: fields.price_slope, // Map price_slope -> priceSlope
-            activeRentals: fields.active_rentals, // Map active_rentals -> activeRentals
-            walrusBlobId: fields.walrus_blob_id, // Map walrus_blob_id -> walrusBlobId
-            litDataHash: fields.lit_data_hash, // Map lit_data_hash -> litDataHash
+            // Map các trường số và chuỗi quan trọng
+            basePrice: fields.base_price, // base_price -> basePrice
+            priceSlope: fields.price_slope, // price_slope -> priceSlope
+            activeRentals: fields.active_rentals, // active_rentals -> activeRentals
+            walrusBlobId: fields.walrus_blob_id, // walrus_blob_id -> walrusBlobId
+            litDataHash: fields.lit_data_hash, // lit_data_hash -> litDataHash
             mimeType: fields.mime_type || "text/plain",
             balance: fields.balance,
-            isActive: fields.is_active, // Map is_active -> isActive
-          } as Listing); // Explicit cast to ensure type safety
+            isActive: fields.is_active, // is_active -> isActive
+          };
+
+          setListing(mappedListing);
+        } else {
+          toast.error("Invalid listing object type");
         }
       } catch (error) {
         console.error("Error fetching listing:", error);
@@ -59,6 +63,7 @@ const ListingDetail = () => {
     fetchListing();
   }, [id, suiClient]);
 
+  // 2. HANDLE RENT (Thuê)
   const handleRent = async () => {
     if (!account) {
       toast.error("Please connect wallet first");
@@ -68,41 +73,46 @@ const ListingDetail = () => {
 
     setRenting(true);
     try {
-      // FIX 3: Use Transaction instead of TransactionBlock
       const txb = new Transaction();
 
-      // FIX 4: Use mapped camelCase properties for calculation
-      // Calculate Price: Base + (Slope * ActiveRentals)
-      const basePrice = BigInt(listing.basePrice);
-      const slope = BigInt(listing.priceSlope);
-      const activeRentals = BigInt(listing.activeRentals);
+      // Sử dụng đúng tên biến camelCase đã map ở trên
+      const basePriceBig = BigInt(listing.basePrice);
+      const slopeBig = BigInt(listing.priceSlope);
+      const rentalsBig = BigInt(listing.activeRentals);
 
-      const currentPrice = basePrice + slope * activeRentals;
-      const hours = 1; // Default rental 1 hour for MVP
+      // Tính giá: Base + (Slope * Rentals)
+      const currentPrice = basePriceBig + slopeBig * rentalsBig;
+      const hours = 1; // Mặc định thuê 1 giờ (Hackathon MVP)
 
-      // Split coin for payment
+      // Tách Coin để trả tiền
       const [coin] = txb.splitCoins(txb.gas, [txb.pure.u64(currentPrice * BigInt(hours))]);
 
+      // Gọi Smart Contract
       txb.moveCall({
         target: `${SUI_CONFIG.packageId}::marketplace::rent_access`,
-        arguments: [txb.object(listing.id), coin, txb.pure.u64(hours), txb.object(SUI_CONFIG.clockObjectId)],
+        arguments: [
+          txb.object(listing.id), // Listing ID
+          coin, // Tiền
+          txb.pure.u64(hours), // Thời gian
+          txb.object("0x6"), // Clock Object (Sui System)
+        ],
       });
 
       signAndExecute(
-        { transaction: txb }, // Note: Prop name is 'transaction', not 'transactionBlock' in newer SDK
+        { transaction: txb },
         {
           onSuccess: (result) => {
             console.log("Rental success:", result);
-            toast.success("Rent successful! Redirecting...");
+            toast.success("Rent successful! Redirecting to viewer...");
 
-            // Wait a bit for indexing then redirect
+            // Đợi 2s để blockchain index rồi chuyển trang
             setTimeout(() => {
               navigate(`/view/${listing.id}`);
             }, 2000);
           },
           onError: (err) => {
             console.error("Rental failed:", err);
-            toast.error("Transaction failed. Please try again.");
+            toast.error("Transaction failed. Try again.");
           },
         },
       );
@@ -114,6 +124,7 @@ const ListingDetail = () => {
     }
   };
 
+  // 3. RENDER UI
   if (loading) {
     return (
       <div className="min-h-screen pt-24 flex justify-center items-center bg-[#0d0d0d]">
@@ -125,47 +136,66 @@ const ListingDetail = () => {
   if (!listing) {
     return (
       <div className="min-h-screen pt-24 text-center bg-[#0d0d0d]">
-        <h2 className="text-xl text-red-500">Listing not found</h2>
-        <Button variant="link" onClick={() => navigate("/")} className="mt-4 text-primary">
-          Return to Marketplace
+        <h2 className="text-xl text-red-500 mb-4">Listing not found</h2>
+        <Button variant="outline" onClick={() => navigate("/")}>
+          <ArrowLeft className="w-4 h-4 mr-2" /> Return Home
         </Button>
       </div>
     );
   }
 
+  // Tính giá hiển thị (đổi từ MIST sang SUI)
+  const displayPrice =
+    (Number(listing.basePrice) + Number(listing.priceSlope) * Number(listing.activeRentals)) / 1_000_000_000;
+
   return (
     <div className="min-h-screen pt-24 pb-12 bg-[#0d0d0d] container mx-auto px-4">
-      <Button variant="ghost" onClick={() => navigate("/")} className="mb-6 text-gray-400 hover:text-white pl-0">
+      <Button
+        variant="ghost"
+        onClick={() => navigate("/")}
+        className="mb-6 text-gray-400 hover:text-white pl-0 hover:bg-transparent"
+      >
         <ArrowLeft className="w-4 h-4 mr-2" /> Back to Marketplace
       </Button>
 
-      <Card className="bg-[#1a1a1a] border-gray-800 p-8 max-w-3xl mx-auto shadow-2xl">
-        <h1 className="text-3xl font-bold text-white mb-6">Rent Access</h1>
+      <Card className="bg-[#1a1a1a] border-gray-800 p-8 max-w-3xl mx-auto shadow-2xl shadow-primary/5">
+        <div className="flex justify-between items-start mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-2">Rent Content Access</h1>
+            <p className="text-gray-400">Unlock encrypted content securely via Lit Protocol</p>
+          </div>
+          <div className="bg-primary/10 px-4 py-2 rounded-full border border-primary/20">
+            <span className="text-primary font-mono font-bold">{displayPrice} SUI</span>
+            <span className="text-primary/60 text-xs ml-1">/ hour</span>
+          </div>
+        </div>
 
         <div className="grid gap-6 mb-8">
           <div className="flex items-center gap-3 p-4 bg-gray-900/50 rounded-lg border border-gray-800">
             <Tag className="w-5 h-5 text-primary" />
-            <div>
-              <p className="text-sm text-gray-500">Listing ID</p>
-              <p className="font-mono text-gray-200 text-sm break-all">{listing.id}</p>
+            <div className="overflow-hidden">
+              <p className="text-sm text-gray-500">Listing Object ID</p>
+              <p className="font-mono text-gray-200 text-sm truncate">{listing.id}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3 p-4 bg-gray-900/50 rounded-lg border border-gray-800">
             <ShieldCheck className="w-5 h-5 text-green-400" />
             <div>
-              <p className="text-sm text-gray-500">Security</p>
-              <p className="text-gray-200 text-sm">End-to-End Encrypted via Lit Protocol & Walrus</p>
+              <p className="text-sm text-gray-500">Security Mechanism</p>
+              <p className="text-gray-200 text-sm">Decentralized Encryption (Walrus + Lit)</p>
             </div>
           </div>
 
-          <div className="p-4 bg-primary/10 rounded-lg border border-primary/20">
-            <p className="text-sm text-gray-400 mb-1">Current Rental Price</p>
-            <p className="text-2xl font-bold text-primary">
-              {(Number(listing.basePrice) + Number(listing.priceSlope) * Number(listing.activeRentals)) / 1_000_000_000}{" "}
-              SUI
-            </p>
-            <p className="text-xs text-gray-500 mt-1">Includes dynamic pricing based on demand</p>
+          <div className="flex items-center gap-3 p-4 bg-gray-900/50 rounded-lg border border-gray-800">
+            <Coins className="w-5 h-5 text-yellow-400" />
+            <div>
+              <p className="text-sm text-gray-500">Dynamic Pricing</p>
+              <p className="text-gray-200 text-sm">
+                Base: {Number(listing.basePrice) / 1_000_000_000} SUI + Slope:{" "}
+                {Number(listing.priceSlope) / 1_000_000_000} SUI/rental
+              </p>
+            </div>
           </div>
         </div>
 
@@ -178,7 +208,7 @@ const ListingDetail = () => {
             {renting ? (
               <>
                 <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                Processing...
+                Processing Payment...
               </>
             ) : (
               "Rent Access (1 Hour)"
@@ -187,10 +217,10 @@ const ListingDetail = () => {
 
           <Button
             variant="outline"
-            className="flex-1 h-12 text-lg border-gray-700 hover:bg-gray-800"
+            className="flex-1 h-12 text-lg border-gray-700 hover:bg-gray-800 hover:text-white"
             onClick={() => navigate(`/view/${listing.id}`)}
           >
-            Already Rented? View Content
+            Already Rented? View Now
           </Button>
         </div>
       </Card>
