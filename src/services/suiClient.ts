@@ -3,7 +3,7 @@
  * Provides blockchain interaction for listings and access passes
  */
 
-import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
+import { SuiClient, SuiHTTPTransport } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { SUI_CONFIG, suiToMist } from '@/config/sui';
 import type { ListingWithMeta, AccessPass } from '@/types/marketplace';
@@ -11,9 +11,20 @@ import type { ListingWithMeta, AccessPass } from '@/types/marketplace';
 // Re-export types for backward compatibility
 export type { ListingWithMeta, AccessPass };
 
-// Initialize Sui client for testnet
+const WS_RPC_BY_NETWORK: Record<typeof SUI_CONFIG.network, string> = {
+  testnet: 'wss://rpc.testnet.sui.io:443',
+};
+
+// Initialize Sui client.
+// IMPORTANT: HTTP RPC uses fullnode.* but WebSocket subscriptions should use rpc.*
 export const suiClient = new SuiClient({
-  url: getFullnodeUrl(SUI_CONFIG.network),
+  transport: new SuiHTTPTransport({
+    url: SUI_CONFIG.rpcUrl,
+    websocket: {
+      url: WS_RPC_BY_NETWORK[SUI_CONFIG.network],
+      reconnectTimeout: 1000,
+    },
+  }),
 });
 
 export default suiClient;
