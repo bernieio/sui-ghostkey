@@ -18,32 +18,45 @@ export interface EncryptionResult {
   dataToEncryptHash: string;
 }
 
-// --- HELPERS ---
+// --- HELPER: ROBUST DATA CONVERSION ---
 
 /**
- * Chuyển Base64 thành Hex string.
- * Lit SDK V6 decrypt bắt buộc dùng Hex, nhưng encrypt lại trả về Base64.
+ * Chuyển Base64 (kể cả Data URI) sang Hex String an toàn.
+ * Khắc phục triệt để lỗi 'InvalidCharacterError' và 'Failed to hex decode'.
  */
-function base64ToHex(base64: string): string {
+function base64ToHex(base64Input: string): string {
   try {
-    // Xóa khoảng trắng/newline nếu có từ Walrus
-    const cleanBase64 = base64.trim();
+    if (!base64Input) return "";
 
-    // Nếu đã là Hex (chỉ chứa 0-9, a-f) thì trả về luôn
-    if (/^[0-9a-fA-F]+$/.test(cleanBase64)) {
-      return cleanBase64;
+    // 1. Làm sạch chuỗi: Xóa khoảng trắng, xuống dòng
+    let cleanStr = base64Input.replace(/\s/g, "");
+
+    // 2. Xóa Data URI Prefix nếu có (VD: "data:application/octet-stream;base64,")
+    if (cleanStr.includes(",")) {
+      cleanStr = cleanStr.split(",")[1];
     }
 
-    const raw = atob(cleanBase64);
-    let result = "";
-    for (let i = 0; i < raw.length; i++) {
-      const hex = raw.charCodeAt(i).toString(16).padStart(2, "0");
-      result += hex;
+    // 3. Nếu chuỗi trông có vẻ là Hex rồi (chỉ chứa 0-9, a-f), trả về luôn
+    // (Tránh trường hợp dữ liệu đã là Hex mà lại đem đi decode Base64)
+    if (/^[0-9a-fA-F]+$/.test(cleanStr) && cleanStr.length % 2 === 0) {
+      return cleanStr;
     }
-    return result;
+
+    // 4. Giải mã Base64 sang Binary String
+    const binaryStr = atob(cleanStr);
+
+    // 5. Chuyển Binary String sang Hex
+    let hexResult = "";
+    for (let i = 0; i < binaryStr.length; i++) {
+      const hex = binaryStr.charCodeAt(i).toString(16).padStart(2, "0");
+      hexResult += hex;
+    }
+
+    return hexResult;
   } catch (e) {
-    console.warn("Failed to convert Base64 to Hex, returning original:", e);
-    return base64;
+    console.error("Critical: Base64 to Hex conversion failed.", e);
+    // Fallback: Trả về chuỗi gốc để Lit SDK tự xử lý (hy vọng mong manh)
+    return base64Input;
   }
 }
 
@@ -215,7 +228,7 @@ Expiration Time: ${expiration}`;
     return sessionData;
   }
 
-  // --- PUBLIC METHODS ---
+  // --- PUBLIC API ---
 
   getSessionExpiry(): number | null {
     const session = this.getStoredSession();
@@ -282,7 +295,7 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    // FIX: Luôn luôn chuyển đổi ciphertext sang Hex trước khi gửi đi
+    // FIX: Tự động chuẩn hóa dữ liệu đầu vào sang Hex
     const hexCiphertext = base64ToHex(ciphertext);
 
     const accessControlConditions = this.getUnifiedAccessControlConditions();
@@ -290,7 +303,7 @@ Expiration Time: ${expiration}`;
     const params: any = {
       accessControlConditions,
       chain: "ethereum",
-      ciphertext: hexCiphertext, // Sử dụng Hex String
+      ciphertext: hexCiphertext, // Đảm bảo Hex
       dataToEncryptHash,
       authSig,
       litActionCode: LIT_ACTION_VERIFY_ACCESS,
@@ -301,7 +314,12 @@ Expiration Time: ${expiration}`;
       },
     };
 
-    console.log("🔓 Decrypting with Hex Ciphertext (len):", hexCiphertext.length);
+    // Debug Log quan trọng
+    console.log("🔓 Decrypt Params:", {
+      cipherLen: ciphertext.length,
+      hexLen: hexCiphertext.length,
+      isHex: /^[0-9a-fA-F]+$/.test(hexCiphertext),
+    });
 
     try {
       const decryptedString = await LitJsSdk.decryptToString(params, this.litNodeClient!);
@@ -309,11 +327,10 @@ Expiration Time: ${expiration}`;
     } catch (error: any) {
       console.error("Lit Decrypt Failed:", error);
 
-      // Auto-recover from invalid auth sig
+      // Auto-recover session
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
         console.warn("AuthSig invalid, regenerating session...");
         localStorage.removeItem(SESSION_KEY);
-        // Recursive retry once
         return this.decryptFile(ciphertext, dataToEncryptHash, listingId, packageId, userAddress);
       }
 
