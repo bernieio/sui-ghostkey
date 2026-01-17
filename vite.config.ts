@@ -16,6 +16,21 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Force single React instance to prevent hook errors
+      "react": path.resolve(__dirname, "./node_modules/react"),
+      "react-dom": path.resolve(__dirname, "./node_modules/react-dom"),
+    },
+  },
+  define: {
+    // Node.js globals for Lit Protocol
+    global: "globalThis",
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom'],
+    esbuildOptions: {
+      define: {
+        global: 'globalThis',
+      },
     },
   },
 }));
