@@ -63,14 +63,20 @@ export async function uploadToWalrus(
     const result = await response.json();
     
     // Walrus returns either newlyCreated or alreadyCertified
-    const blobInfo = result.newlyCreated?.blobObject || result.alreadyCertified?.blobObject;
+    // Note: alreadyCertified has blobId directly, not inside blobObject
+    let blobId: string;
     
-    if (!blobInfo) {
+    if (result.newlyCreated?.blobObject?.blobId) {
+      blobId = result.newlyCreated.blobObject.blobId;
+      console.log('Walrus: newly created blob');
+    } else if (result.alreadyCertified?.blobId) {
+      blobId = result.alreadyCertified.blobId;
+      console.log('Walrus: blob already certified');
+    } else {
       console.error('Invalid Walrus response:', result);
-      throw new Error('Invalid Walrus response: no blob info');
+      throw new Error('Invalid Walrus response: no blob info found');
     }
 
-    const blobId = blobInfo.blobId;
     console.log('Walrus upload successful, blobId:', blobId);
     
     return {
