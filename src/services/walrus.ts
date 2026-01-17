@@ -1,23 +1,27 @@
 import { WALRUS_CONFIG } from "@/config/walrus";
 
-/**
- * Upload thông qua Vercel Proxy để tránh CORS
- */
-export const uploadToWalrus = async (data: string, mimeType: string = "text/plain"): Promise<string> => {
-  try {
-    console.log("🚀 Uploading to Walrus via Proxy...");
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex;
+}
 
-    // Gọi về API Route của chính mình
+export const uploadToWalrus = async (hexData: string): Promise<string> => {
+  try {
+    console.log("Uploading to Walrus via Proxy...");
+
     const response = await fetch("/api/walrus-upload", {
       method: "POST",
-      body: data, // Gửi Hex String
+      body: hexData,
       headers: {
         "Content-Type": "text/plain",
       },
     });
 
     if (!response.ok) {
-      const err = await response.json();
+      const err = await response.json().catch(() => ({ error: response.statusText }));
       throw new Error(`Upload failed: ${err.error || response.statusText}`);
     }
 
@@ -36,10 +40,6 @@ export const uploadToWalrus = async (data: string, mimeType: string = "text/plai
   }
 };
 
-/**
- * Fetch trực tiếp từ Aggregator (Thường Aggregator cho phép CORS GET)
- * Nếu cần thiết cũng có thể proxy nốt cái này, nhưng thử trực tiếp trước cho nhanh.
- */
 export const fetchFromWalrus = async (blobId: string): Promise<string> => {
   let lastError: any;
 
@@ -52,8 +52,9 @@ export const fetchFromWalrus = async (blobId: string): Promise<string> => {
         throw new Error(`Status ${response.status}`);
       }
 
-      // Trả về Text (Hex String)
-      return await response.text();
+      const arrayBuffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      return bytesToHex(bytes);
     } catch (error) {
       console.warn(`Fetch failed ${aggregatorUrl}:`, error);
       lastError = error;

@@ -46,9 +46,8 @@ const Upload = () => {
         account.address,
       );
 
-      // 2. Upload to Walrus via Proxy (Hex String)
       toast.loading("Uploading to Walrus...", { id: toastId });
-      const blobId = await uploadToWalrus(ciphertext, "text/plain");
+      const blobId = await uploadToWalrus(ciphertext);
 
       // 3. Create Listing
       toast.loading("Confirming on Sui...", { id: toastId });

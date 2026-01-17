@@ -1,19 +1,17 @@
 export const WALRUS_CONFIG = {
-  // Danh sách Node Publisher (Dùng cho Server-side Proxy)
   PUBLISHERS: [
     "https://publisher.walrus-testnet.walrus.space",
-    "https://sui-walrus-testnet-publisher.bwarelabs.com",
-    "https://publisher.testnet.walrus.atalma.io",
-    "https://walrus-testnet.blockscope.net:11444",
-    "https://walrus-testnet-publisher.chainbase.online",
+    "https://walrus-testnet-publisher.nodes.guru",
+    "https://walrus-testnet-publisher.staketab.org",
+    "https://walrus.testnet.pops.one",
+    "https://ivory-appalling-hamster.walrus-testnet.quiknode.pro",
   ],
-  // Danh sách Aggregator (Dùng cho Client-side Download)
   AGGREGATORS: [
     "https://aggregator.walrus-testnet.walrus.space",
-    "https://sui-walrus-tn-aggregator.bwarelabs.com",
-    "https://aggregator.testnet.walrus.atalma.io",
+    "https://walrus-testnet-aggregator.nodes.guru",
+    "https://walrus-testnet-aggregator.staketab.org",
+    "https://walrus-agg.testnet.pops.one",
     "https://walrus-testnet.blockscope.net",
-    "https://walrus-testnet-aggregator.brightlystake.com",
   ],
 
   DEFAULT_EPOCHS: 5,
