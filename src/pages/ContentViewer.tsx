@@ -4,16 +4,16 @@
  * Verifies AccessPass ownership before showing content
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useCurrentAccount } from '@mysten/dapp-kit';
-import { useQuery } from '@tanstack/react-query';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Clock, 
-  Lock, 
-  Eye, 
-  AlertTriangle, 
+import { useState, useEffect, useCallback } from "react";
+import { useParams, useNavigate, Link } from "react-router-dom";
+import { useCurrentAccount } from "@mysten/dapp-kit";
+import { useQuery } from "@tanstack/react-query";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Clock,
+  Lock,
+  Eye,
+  AlertTriangle,
   ArrowLeft,
   FileText,
   Image as ImageIcon,
@@ -22,23 +22,23 @@ import {
   Shield,
   Timer,
   Copy,
-  Check
-} from 'lucide-react';
+  Check,
+} from "lucide-react";
 
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { fetchListing, fetchUserAccessPasses } from '@/services/suiClient';
-import { fetchFromWalrus } from '@/services/walrus';
-import { litService } from '@/services/litProtocol';
-import { LIT_CONFIG } from '@/config/lit';
-import Header from '@/components/Header';
-import Footer from '@/components/Footer';
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { fetchListing, fetchUserAccessPasses } from "@/services/suiClient";
+import { fetchFromWalrus } from "@/services/walrus";
+import { litService } from "@/services/litProtocol";
+import { LIT_CONFIG } from "@/config/lit";
+import Header from "@/components/Header";
+import Footer from "@/components/Footer";
 
 const VIEW_TIMEOUT_SECONDS = LIT_CONFIG.contentViewTimeoutSeconds; // 60 seconds
 
-type ViewState = 'verifying' | 'loading' | 'viewing' | 'expired' | 'no-access' | 'error';
+type ViewState = "verifying" | "loading" | "viewing" | "expired" | "no-access" | "error";
 
 interface DecodedContent {
   data: Uint8Array;
@@ -51,8 +51,8 @@ const ContentViewer = () => {
   const { listingId } = useParams<{ listingId: string }>();
   const navigate = useNavigate();
   const account = useCurrentAccount();
-  
-  const [viewState, setViewState] = useState<ViewState>('verifying');
+
+  const [viewState, setViewState] = useState<ViewState>("verifying");
   const [timeRemaining, setTimeRemaining] = useState<number>(VIEW_TIMEOUT_SECONDS);
   const [content, setContent] = useState<DecodedContent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,20 +60,20 @@ const ContentViewer = () => {
 
   // Fetch listing details
   const { data: listing, isLoading: listingLoading } = useQuery({
-    queryKey: ['listing', listingId],
+    queryKey: ["listing", listingId],
     queryFn: () => fetchListing(listingId!),
     enabled: !!listingId,
   });
 
   // Fetch user's access passes
   const { data: accessPasses } = useQuery({
-    queryKey: ['user-access-passes', account?.address],
+    queryKey: ["user-access-passes", account?.address],
     queryFn: () => fetchUserAccessPasses(account!.address),
     enabled: !!account?.address,
   });
 
   // Check if user has valid access pass for this listing
-  const validAccessPass = accessPasses?.find(pass => {
+  const validAccessPass = accessPasses?.find((pass) => {
     const isForThisListing = pass.listingId === listingId;
     const isNotExpired = Number(pass.expiryMs) > Date.now();
     return isForThisListing && isNotExpired;
@@ -88,76 +88,76 @@ const ContentViewer = () => {
     if (!listing || !account?.address || !listingId) return;
 
     try {
-      setViewState('verifying');
-      
+      setViewState("verifying");
+
       // Verify access through Lit Protocol
       const hasAccess = await litService.verifyAccess(account.address, listingId);
-      
+
       if (!hasAccess) {
-        setViewState('no-access');
+        setViewState("no-access");
         return;
       }
 
-      setViewState('loading');
+      setViewState("loading");
 
       // Validate walrusBlobId before fetching
       const blobId = listing.walrusBlobId;
-      console.log('📥 Listing data:', { 
+      console.log("📥 Listing data:", {
         objectId: listing.objectId,
         walrusBlobId: blobId,
         litDataHash: listing.litDataHash,
-        mimeType: listing.mimeType 
+        mimeType: listing.mimeType,
       });
-      
-      if (!blobId || blobId === 'undefined' || blobId.trim() === '') {
+
+      if (!blobId || blobId === "undefined" || blobId.trim() === "") {
         throw new Error(
-          'Walrus blob ID is missing from this listing. ' +
-          'The content may not have been uploaded correctly, or there is a data parsing issue.'
+          "Walrus blob ID is missing from this listing. " +
+            "The content may not have been uploaded correctly, or there is a data parsing issue.",
         );
       }
-      
+
       // Fetch ciphertext from Walrus
-      console.log('📥 Fetching ciphertext from Walrus:', blobId);
+      console.log("📥 Fetching ciphertext from Walrus:", blobId);
       const encryptedData = await fetchFromWalrus(blobId);
-      
-      // Convert Uint8Array to base64 string for Lit Protocol
-      const ciphertextBase64 = btoa(String.fromCharCode(...encryptedData));
+
+      // FIX: Use TextDecoder instead of btoa(String.fromCharCode(...))
+      // Because the data in Walrus is already a ciphertext string stored as bytes
+      const ciphertextBase64 = new TextDecoder().decode(encryptedData);
 
       // Get dataToEncryptHash from the listing (stored on-chain in lit_data_hash)
       const dataToEncryptHash = listing.litDataHash;
-      
-      if (!dataToEncryptHash || dataToEncryptHash === 'undefined' || dataToEncryptHash.trim() === '') {
+
+      if (!dataToEncryptHash || dataToEncryptHash === "undefined" || dataToEncryptHash.trim() === "") {
         throw new Error(
-          'Encryption hash (lit_data_hash) is missing from this listing. ' +
-          'The content may have been uploaded with an older version.'
+          "Encryption hash (lit_data_hash) is missing from this listing. " +
+            "The content may have been uploaded with an older version.",
         );
       }
-      
-      console.log('🔐 Decrypting with Lit Protocol...', {
+
+      console.log("🔐 Decrypting with Lit Protocol...", {
         ciphertextLength: ciphertextBase64.length,
         hash: dataToEncryptHash,
       });
-      
+
       // Decrypt content using Lit Protocol
       // ciphertext from Walrus + dataToEncryptHash from Sui = decrypted content
       const decryptedContent = await litService.decryptFile(
-        ciphertextBase64,        // Ciphertext from Walrus (base64)
-        dataToEncryptHash,       // Hash from Sui (lit_data_hash)
+        ciphertextBase64, // Ciphertext from Walrus (base64)
+        dataToEncryptHash, // Hash from Sui (lit_data_hash)
         listingId,
-        (await import('@/config/sui')).SUI_CONFIG.packageId,
-        account.address
+        (await import("@/config/sui")).SUI_CONFIG.packageId,
+        account.address,
       );
 
       // Convert decrypted string to Uint8Array for processing
       const decrypted = new TextEncoder().encode(decryptedContent);
       processDecryptedContent(decrypted, listing.mimeType);
-      setViewState('viewing');
+      setViewState("viewing");
       setTimeRemaining(VIEW_TIMEOUT_SECONDS);
-
     } catch (err) {
-      console.error('Content load error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load content');
-      setViewState('error');
+      console.error("Content load error:", err);
+      setError(err instanceof Error ? err.message : "Failed to load content");
+      setViewState("error");
     }
   }, [listing, account?.address, listingId]);
 
@@ -165,9 +165,9 @@ const ContentViewer = () => {
   const processDecryptedContent = (data: Uint8Array, mimeType: string) => {
     const decoded: DecodedContent = { data, mimeType };
 
-    if (mimeType.startsWith('text/') || mimeType === 'application/json') {
+    if (mimeType.startsWith("text/") || mimeType === "application/json") {
       decoded.text = new TextDecoder().decode(data);
-    } else if (mimeType.startsWith('image/')) {
+    } else if (mimeType.startsWith("image/")) {
       const blob = new Blob([data.slice()], { type: mimeType });
       decoded.imageUrl = URL.createObjectURL(blob);
     }
@@ -177,12 +177,12 @@ const ContentViewer = () => {
 
   // Countdown timer
   useEffect(() => {
-    if (viewState !== 'viewing') return;
+    if (viewState !== "viewing") return;
 
     const timer = setInterval(() => {
-      setTimeRemaining(prev => {
+      setTimeRemaining((prev) => {
         if (prev <= 1) {
-          setViewState('expired');
+          setViewState("expired");
           return 0;
         }
         return prev - 1;
@@ -194,10 +194,10 @@ const ContentViewer = () => {
 
   // Auto-load content when we have valid access
   useEffect(() => {
-    if (validAccessPass && listing && account?.address && viewState === 'verifying') {
+    if (validAccessPass && listing && account?.address && viewState === "verifying") {
       loadContent();
     } else if (!validAccessPass && accessPasses !== undefined && !listingLoading) {
-      setViewState('no-access');
+      setViewState("no-access");
     }
   }, [validAccessPass, listing, account?.address, accessPasses, listingLoading, loadContent, viewState]);
 
@@ -220,9 +220,9 @@ const ContentViewer = () => {
 
   // Get icon for MIME type
   const getMimeIcon = (mimeType: string) => {
-    if (mimeType.startsWith('image/')) return ImageIcon;
-    if (mimeType.startsWith('text/')) return FileText;
-    if (mimeType === 'application/json') return Code;
+    if (mimeType.startsWith("image/")) return ImageIcon;
+    if (mimeType.startsWith("text/")) return FileText;
+    if (mimeType === "application/json") return Code;
     return File;
   };
 
@@ -238,9 +238,7 @@ const ContentViewer = () => {
             <CardContent className="pt-6 text-center">
               <Lock className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
               <h2 className="text-xl font-bold mb-2">Wallet Required</h2>
-              <p className="text-muted-foreground mb-4">
-                Connect your wallet to view content
-              </p>
+              <p className="text-muted-foreground mb-4">Connect your wallet to view content</p>
             </CardContent>
           </Card>
         </main>
@@ -252,10 +250,10 @@ const ContentViewer = () => {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
-      
+
       <main className="flex-1 container mx-auto px-4 py-8">
         {/* Back button */}
-        <Link to={listingId ? `/listing/${listingId}` : '/'}>
+        <Link to={listingId ? `/listing/${listingId}` : "/"}>
           <Button variant="ghost" className="mb-6">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Listing
@@ -264,7 +262,7 @@ const ContentViewer = () => {
 
         <AnimatePresence mode="wait">
           {/* Verifying State */}
-          {viewState === 'verifying' && (
+          {viewState === "verifying" && (
             <motion.div
               key="verifying"
               initial={{ opacity: 0, y: 20 }}
@@ -282,16 +280,14 @@ const ContentViewer = () => {
                     <Shield className="h-12 w-12 text-primary" />
                   </motion.div>
                   <h2 className="text-xl font-bold mb-2">Verifying Access</h2>
-                  <p className="text-muted-foreground">
-                    Checking your AccessPass with Lit Protocol...
-                  </p>
+                  <p className="text-muted-foreground">Checking your AccessPass with Lit Protocol...</p>
                 </CardContent>
               </Card>
             </motion.div>
           )}
 
           {/* Loading State */}
-          {viewState === 'loading' && (
+          {viewState === "loading" && (
             <motion.div
               key="loading"
               initial={{ opacity: 0, y: 20 }}
@@ -309,16 +305,14 @@ const ContentViewer = () => {
                     <Eye className="h-12 w-12 text-primary" />
                   </motion.div>
                   <h2 className="text-xl font-bold mb-2">Decrypting Content</h2>
-                  <p className="text-muted-foreground">
-                    Fetching from Walrus and decrypting...
-                  </p>
+                  <p className="text-muted-foreground">Fetching from Walrus and decrypting...</p>
                 </CardContent>
               </Card>
             </motion.div>
           )}
 
           {/* No Access State */}
-          {viewState === 'no-access' && (
+          {viewState === "no-access" && (
             <motion.div
               key="no-access"
               initial={{ opacity: 0, y: 20 }}
@@ -333,16 +327,14 @@ const ContentViewer = () => {
                   <p className="text-muted-foreground mb-4">
                     You don't have a valid AccessPass for this content, or it has expired.
                   </p>
-                  <Button onClick={() => navigate(`/listing/${listingId}`)}>
-                    Rent Access
-                  </Button>
+                  <Button onClick={() => navigate(`/listing/${listingId}`)}>Rent Access</Button>
                 </CardContent>
               </Card>
             </motion.div>
           )}
 
           {/* Error State */}
-          {viewState === 'error' && (
+          {viewState === "error" && (
             <motion.div
               key="error"
               initial={{ opacity: 0, y: 20 }}
@@ -359,9 +351,7 @@ const ContentViewer = () => {
                     <Button variant="outline" onClick={() => loadContent()}>
                       Try Again
                     </Button>
-                    <Button onClick={() => navigate(`/listing/${listingId}`)}>
-                      Back to Listing
-                    </Button>
+                    <Button onClick={() => navigate(`/listing/${listingId}`)}>Back to Listing</Button>
                   </div>
                 </CardContent>
               </Card>
@@ -369,7 +359,7 @@ const ContentViewer = () => {
           )}
 
           {/* Expired State */}
-          {viewState === 'expired' && (
+          {viewState === "expired" && (
             <motion.div
               key="expired"
               initial={{ opacity: 0, y: 20 }}
@@ -381,9 +371,7 @@ const ContentViewer = () => {
                 <CardContent className="pt-6 text-center">
                   <Timer className="h-12 w-12 mx-auto mb-4 text-yellow-500" />
                   <h2 className="text-xl font-bold mb-2">Viewing Time Expired</h2>
-                  <p className="text-muted-foreground mb-4">
-                    Your 60-second viewing window has ended.
-                  </p>
+                  <p className="text-muted-foreground mb-4">Your 60-second viewing window has ended.</p>
                   {timeUntilExpiry > 0 && (
                     <Button onClick={() => loadContent()}>
                       View Again ({Math.floor(timeUntilExpiry / 60000)} min remaining)
@@ -395,7 +383,7 @@ const ContentViewer = () => {
           )}
 
           {/* Viewing State - Content Display */}
-          {viewState === 'viewing' && content && (
+          {viewState === "viewing" && content && (
             <motion.div
               key="viewing"
               initial={{ opacity: 0, y: 20 }}
@@ -407,10 +395,10 @@ const ContentViewer = () => {
                 <CardContent className="py-4">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <Clock className={`h-5 w-5 ${timeRemaining <= 10 ? 'text-destructive animate-pulse' : 'text-primary'}`} />
-                      <span className="font-medium">
-                        Time Remaining: {timeRemaining}s
-                      </span>
+                      <Clock
+                        className={`h-5 w-5 ${timeRemaining <= 10 ? "text-destructive animate-pulse" : "text-primary"}`}
+                      />
+                      <span className="font-medium">Time Remaining: {timeRemaining}s</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className="border-primary/30">
@@ -423,10 +411,7 @@ const ContentViewer = () => {
                       </Badge>
                     </div>
                   </div>
-                  <Progress 
-                    value={progress} 
-                    className={`h-2 ${timeRemaining <= 10 ? '[&>div]:bg-destructive' : ''}`}
-                  />
+                  <Progress value={progress} className={`h-2 ${timeRemaining <= 10 ? "[&>div]:bg-destructive" : ""}`} />
                 </CardContent>
               </Card>
 
@@ -438,12 +423,7 @@ const ContentViewer = () => {
                     Content Viewer
                   </CardTitle>
                   {content.text && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleCopy}
-                      className="border-primary/30"
-                    >
+                    <Button variant="outline" size="sm" onClick={handleCopy} className="border-primary/30">
                       {copied ? (
                         <>
                           <Check className="h-4 w-4 mr-1 text-green-500" />
@@ -467,9 +447,7 @@ const ContentViewer = () => {
                       </pre>
                       {/* Watermark overlay */}
                       <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-5">
-                        <span className="text-6xl font-bold text-primary rotate-[-30deg]">
-                          GHOSTKEY
-                        </span>
+                        <span className="text-6xl font-bold text-primary rotate-[-30deg]">GHOSTKEY</span>
                       </div>
                     </div>
                   )}
@@ -481,13 +459,11 @@ const ContentViewer = () => {
                         src={content.imageUrl}
                         alt="Protected content"
                         className="max-w-full h-auto rounded-lg mx-auto"
-                        style={{ maxHeight: '60vh' }}
+                        style={{ maxHeight: "60vh" }}
                       />
                       {/* Watermark overlay */}
                       <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                        <span className="text-4xl font-bold text-white/20 rotate-[-30deg] select-none">
-                          GHOSTKEY
-                        </span>
+                        <span className="text-4xl font-bold text-white/20 rotate-[-30deg] select-none">GHOSTKEY</span>
                       </div>
                     </div>
                   )}
@@ -496,12 +472,8 @@ const ContentViewer = () => {
                   {!content.text && !content.imageUrl && (
                     <div className="text-center py-8">
                       <File className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
-                      <p className="text-muted-foreground">
-                        Binary content ({content.data.length} bytes)
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-2">
-                        MIME Type: {content.mimeType}
-                      </p>
+                      <p className="text-muted-foreground">Binary content ({content.data.length} bytes)</p>
+                      <p className="text-sm text-muted-foreground mt-2">MIME Type: {content.mimeType}</p>
                     </div>
                   )}
                 </CardContent>
