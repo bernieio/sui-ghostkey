@@ -5,8 +5,8 @@
 
 export const WALRUS_CONFIG = {
   // Aggregator endpoints for testnet
-  aggregatorUrl: 'https://aggregator-devnet.walrus.space',
-  publisherUrl: 'https://publisher-devnet.walrus.space',
+  aggregatorUrl: 'https://aggregator.walrus-testnet.walrus.space',
+  publisherUrl: 'https://publisher.walrus-testnet.walrus.space',
   
   // Storage configuration
   maxFileSizeMB: 100,
