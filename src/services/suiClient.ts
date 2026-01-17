@@ -36,6 +36,18 @@ function parseListing(objectId: string, fields: Record<string, unknown>): Listin
   
   // Calculate price per hour (same as base_price for first rental)
   const pricePerHour = basePrice;
+
+  // Extract balance value - handle both raw value and Balance<SUI> object
+  let balanceValue = BigInt(0);
+  if (fields.balance !== undefined) {
+    if (typeof fields.balance === 'string' || typeof fields.balance === 'number') {
+      balanceValue = BigInt(fields.balance);
+    } else if (typeof fields.balance === 'object' && fields.balance !== null) {
+      // Balance<SUI> is stored as { value: string }
+      const balObj = fields.balance as { value?: string };
+      balanceValue = BigInt(balObj.value || '0');
+    }
+  }
   
   return {
     // ListingWithMeta specific fields
@@ -46,14 +58,14 @@ function parseListing(objectId: string, fields: Record<string, unknown>): Listin
     // Base Listing fields
     id: objectId,
     seller: fields.seller as string,
-    walrusBlobId: fields.blob_id as string,
+    walrusBlobId: fields.walrus_blob_id as string, // Fixed: was blob_id, should be walrus_blob_id
     litDataHash: fields.lit_data_hash as string,
     basePrice,
     priceSlope,
     activeRentals,
     mimeType: fields.mime_type as string || 'application/octet-stream',
-    balance: BigInt(fields.balance as string || '0'),
-    isActive: !(fields.is_paused as boolean || false),
+    balance: balanceValue,
+    isActive: fields.is_active as boolean ?? true, // Fixed: was is_paused (inverted), should be is_active
     lastDecayTimestamp: BigInt(fields.last_decay_timestamp as string || '0'),
     decayedThisPeriod: BigInt(fields.decayed_this_period as string || '0'),
   };
