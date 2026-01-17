@@ -1,43 +1,38 @@
 /**
  * Lit Protocol Service for GhostKey
- * Refactored: Walrus stores ciphertext, Sui stores dataToEncryptHash
- * 
- * Architecture:
- * - Seller encrypts file with Lit Protocol
- * - Ciphertext (large) -> stored on Walrus
- * - dataToEncryptHash (small) -> stored on Sui (lit_data_hash field)
- * - Buyer fetches ciphertext from Walrus, hash from Sui, then decrypts via Lit
+ * FIXED: SIWE Compliant AuthSig Generation
  */
 
-import * as LitJsSdk from '@lit-protocol/lit-node-client';
-import { LitNodeClient } from '@lit-protocol/lit-node-client';
-import { LIT_CONFIG } from '@/config/lit';
-import { SUI_CONFIG } from '@/config/sui';
-import { ethers } from 'ethers';
+import * as LitJsSdk from "@lit-protocol/lit-node-client";
+import { LitNodeClient } from "@lit-protocol/lit-node-client";
+import { LIT_CONFIG } from "@/config/lit";
+import { SUI_CONFIG } from "@/config/sui";
+import { ethers } from "ethers";
 
 // Session storage keys
-const SESSION_KEY = 'ghostkey_lit_session';
-const BURNER_WALLET_KEY = 'ghostkey_burner_wallet';
+const SESSION_KEY = "ghostkey_lit_session";
+const BURNER_WALLET_KEY = "ghostkey_burner_wallet";
 
+// Cập nhật interface để lưu luôn message gốc đã ký
 interface SessionData {
   signature: string;
   address: string;
   expiry: number;
+  signedMessage: string; // <--- QUAN TRỌNG: Lưu message gốc để gửi lại cho Lit
 }
 
 export interface EncryptionResult {
-  ciphertext: string;         // Base64 encoded - stored on Walrus
-  dataToEncryptHash: string;  // Stored on Sui (lit_data_hash)
+  ciphertext: string;
+  dataToEncryptHash: string;
 }
 
-// Lit Action code that runs on Lit nodes to verify Sui AccessPass ownership
+// Lit Action code giữ nguyên
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const SUI_RPC_URL = "https://fullnode.testnet.sui.io:443";
   const { userAddress, listingId, packageId } = jsParams;
   
   try {
-    // Query Sui RPC for user's AccessPass NFTs
     const response = await fetch(SUI_RPC_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,7 +59,6 @@ const LIT_ACTION_VERIFY_ACCESS = `
     
     const now = Date.now();
     
-    // Find a valid AccessPass for this listing
     const validPass = data.result.data.find(obj => {
       if (!obj.data?.content?.fields) return false;
       const fields = obj.data.content.fields;
@@ -89,71 +83,47 @@ class LitProtocolService {
   private burnerWallet: ethers.Wallet | null = null;
   private isConnecting: boolean = false;
 
-  /**
-   * Initialize or get the Lit Node Client
-   */
   async connect(): Promise<LitNodeClient> {
-    if (this.litNodeClient?.ready) {
-      return this.litNodeClient;
-    }
+    if (this.litNodeClient?.ready) return this.litNodeClient;
 
     if (this.isConnecting) {
-      while (this.isConnecting) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      if (this.litNodeClient?.ready) {
-        return this.litNodeClient;
-      }
+      while (this.isConnecting) await new Promise((r) => setTimeout(r, 100));
+      if (this.litNodeClient?.ready) return this.litNodeClient;
     }
 
     this.isConnecting = true;
-
     try {
       this.litNodeClient = new LitNodeClient({
         litNetwork: LIT_CONFIG.network,
         debug: false,
       });
-
       await this.litNodeClient.connect();
-      console.log('✅ Connected to Lit Protocol network:', LIT_CONFIG.network);
+      console.log("✅ Connected to Lit Protocol network:", LIT_CONFIG.network);
       return this.litNodeClient;
     } catch (error) {
-      console.error('❌ Failed to connect to Lit Protocol:', error);
+      console.error("❌ Failed to connect to Lit Protocol:", error);
       throw error;
     } finally {
       this.isConnecting = false;
     }
   }
 
-  /**
-   * Get or create a burner wallet for Lit Protocol authentication
-   */
   getBurnerWallet(): ethers.Wallet {
-    if (this.burnerWallet) {
-      return this.burnerWallet;
-    }
-
+    if (this.burnerWallet) return this.burnerWallet;
     if (LIT_CONFIG.burnerPrivateKey) {
-      console.log('Using configured burner wallet');
       this.burnerWallet = new ethers.Wallet(LIT_CONFIG.burnerPrivateKey);
       return this.burnerWallet;
     }
-
     const storedKey = sessionStorage.getItem(BURNER_WALLET_KEY);
     if (storedKey) {
       this.burnerWallet = new ethers.Wallet(storedKey);
       return this.burnerWallet;
     }
-
     this.burnerWallet = ethers.Wallet.createRandom();
     sessionStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
-    console.log('Created new burner wallet for Lit auth');
     return this.burnerWallet;
   }
 
-  /**
-   * Check if there's a valid session
-   */
   hasValidSession(): boolean {
     const sessionData = this.getStoredSession();
     if (!sessionData) return false;
@@ -180,22 +150,42 @@ class LitProtocolService {
     this.burnerWallet = null;
   }
 
+  // --- FIX: GENERATE STANDARD SIWE MESSAGE ---
   async generateSession(): Promise<SessionData> {
     const wallet = this.getBurnerWallet();
-    const expiryDays = LIT_CONFIG.sessionDurationDays;
-    const expiry = Date.now() + (expiryDays * 24 * 60 * 60 * 1000);
-    
-    const message = `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(expiry).toISOString()}`;
+    const expiryDays = LIT_CONFIG.sessionDurationDays || 7;
+    const expiration = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
+    const issuedAt = new Date().toISOString();
+
+    // Construct valid SIWE message
+    const domain = window.location.host || "localhost";
+    const origin = window.location.origin || "http://localhost:5173";
+    const statement = "Authorize GhostKey access to Lit Protocol.";
+    const nonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
+
+    const message = `${domain} wants you to sign in with your Ethereum account:
+${wallet.address}
+
+${statement}
+
+URI: ${origin}
+Version: 1
+Chain ID: 1
+Nonce: ${nonce}
+Issued At: ${issuedAt}
+Expiration Time: ${expiration}`;
+
     const signature = await wallet.signMessage(message);
-    
+
     const sessionData: SessionData = {
       signature,
       address: wallet.address,
-      expiry,
+      expiry: Date.parse(expiration),
+      signedMessage: message, // Store exact message string
     };
-    
+
     this.storeSession(sessionData);
-    console.log('Generated new Lit session, expires:', new Date(expiry).toISOString());
+    console.log("✅ Generated new Lit session (SIWE compliant)");
     return sessionData;
   }
 
@@ -206,213 +196,106 @@ class LitProtocolService {
     return this.generateSession();
   }
 
-  /**
-   * Get session expiry date (for UI display)
-   */
-  getSessionExpiry(): Date | null {
-    const session = this.getStoredSession();
-    if (!session) return null;
-    return new Date(session.expiry);
-  }
-
-  /**
-   * Get Access Control Conditions for Lit Protocol
-   * Simple EVM condition - actual access check is via verifyAccess() before decrypt
-   */
   private getAccessControlConditions() {
     return [
       {
-        conditionType: 'evmBasic',
-        contractAddress: '',
-        standardContractType: '',
-        chain: 'ethereum',
-        method: '',
-        parameters: [':userAddress'],
+        conditionType: "evmBasic",
+        contractAddress: "",
+        standardContractType: "",
+        chain: "ethereum",
+        method: "",
+        parameters: [":userAddress"],
         returnValueTest: {
-          comparator: '=',
-          value: ':userAddress',
+          comparator: "=",
+          value: ":userAddress",
         },
       },
     ];
   }
 
-  /**
-   * ENCRYPT FILE (Used by Seller during upload)
-   * 
-   * Returns:
-   * - ciphertext: Base64 string to upload to Walrus
-   * - dataToEncryptHash: Hash to store on Sui (lit_data_hash field)
-   */
-  async encryptFile(
-    file: File,
-    listingId: string,
-    packageId: string,
-    userAddress: string
-  ): Promise<EncryptionResult> {
+  async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
-    await this.ensureSession();
-    
-    const wallet = this.getBurnerWallet();
-    const session = this.getStoredSession()!;
-    
+    const session = await this.ensureSession();
+
+    // FIX: Use stored session message
     const authSig = {
       sig: session.signature,
-      derivedVia: 'web3.eth.personal.sign',
-      signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
-      address: wallet.address,
+      derivedVia: "web3.eth.personal.sign",
+      signedMessage: session.signedMessage, // Must match signature exactly
+      address: session.address,
     };
-    
+
     const accessControlConditions = this.getAccessControlConditions();
-    
-    // Read file content as text
     const fileContent = await file.text();
-    
-    console.log('🔐 Encrypting file with Lit Protocol...', { listingId, fileSize: fileContent.length });
-    
-    // Encrypt using Lit Protocol
+
+    console.log("🔐 Encrypting file...");
+
     const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
       {
         accessControlConditions,
         dataToEncrypt: fileContent,
+        authSig, // Pass authSig explicitly in v6
+        chain: "ethereum",
       },
       this.litNodeClient!,
     );
-    
-    console.log('✅ File encrypted successfully');
-    console.log('📦 Ciphertext length:', ciphertext.length);
-    console.log('📦 dataToEncryptHash:', dataToEncryptHash);
-    
-    // Return separately:
-    // - ciphertext -> upload to Walrus
-    // - dataToEncryptHash -> store on Sui (lit_data_hash)
-    return {
-      ciphertext,
-      dataToEncryptHash,
-    };
+
+    return { ciphertext, dataToEncryptHash };
   }
 
-  /**
-   * Verify access using direct RPC call to Sui
-   * Checks if user owns a valid (non-expired) AccessPass for the listing
-   */
-  async verifyAccess(userAddress: string, listingId: string): Promise<boolean> {
-    try {
-      console.log('🔍 Verifying access for:', { userAddress, listingId });
-      
-      const response = await fetch(SUI_CONFIG.rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'suix_getOwnedObjects',
-          params: [
-            userAddress,
-            {
-              filter: { StructType: SUI_CONFIG.types.accessPass },
-              options: { showContent: true }
-            }
-          ]
-        })
-      });
-      
-      const data = await response.json();
-      
-      if (!data.result?.data) {
-        console.log('❌ No AccessPass objects found');
-        return false;
-      }
-      
-      const currentTime = Date.now();
-      
-      for (const obj of data.result.data) {
-        if (obj.data?.content?.fields) {
-          const fields = obj.data.content.fields;
-          const passListingId = fields.listing_id;
-          const expiryMs = parseInt(fields.expiry_ms);
-          
-          console.log('📋 Checking AccessPass:', { passListingId, expiryMs, currentTime, matches: passListingId === listingId, valid: currentTime < expiryMs });
-          
-          if (passListingId === listingId && currentTime < expiryMs) {
-            console.log('✅ Valid AccessPass found');
-            return true;
-          }
-        }
-      }
-      
-      console.log('❌ No valid AccessPass for this listing');
-      return false;
-    } catch (error) {
-      console.error('❌ Error verifying access:', error);
-      return false;
-    }
-  }
-
-  /**
-   * DECRYPT FILE (Used by Buyer to view content)
-   * 
-   * Parameters:
-   * - ciphertext: Base64 string fetched from Walrus
-   * - dataToEncryptHash: Hash fetched from Sui (lit_data_hash field)
-   * - listingId: ID of the listing
-   * - packageId: Sui package ID
-   * - userAddress: Buyer's wallet address
-   */
   async decryptFile(
-    ciphertext: string,        // From Walrus
-    dataToEncryptHash: string, // From Sui (lit_data_hash)
+    ciphertext: string,
+    dataToEncryptHash: string,
     listingId: string,
     packageId: string,
-    userAddress: string
+    userAddress: string,
   ): Promise<string> {
     await this.connect();
-    await this.ensureSession();
-    
-    console.log('🔐 Starting decryption...', {
-      ciphertextLength: ciphertext.length,
-      hash: dataToEncryptHash,
-      listingId,
-      userAddress,
-    });
+    const session = await this.ensureSession(); // Ensure valid session
 
-    // First verify access via direct RPC
-    const hasAccess = await this.verifyAccess(userAddress, listingId);
-    if (!hasAccess) {
-      throw new Error('Access denied: You do not have a valid AccessPass for this listing');
-    }
-    
-    const wallet = this.getBurnerWallet();
-    const session = this.getStoredSession()!;
-    
+    // FIX: Use stored session message
     const authSig = {
       sig: session.signature,
-      derivedVia: 'web3.eth.personal.sign',
-      signedMessage: `Authorize GhostKey access to Lit Protocol.\nExpires: ${new Date(session.expiry).toISOString()}`,
-      address: wallet.address,
+      derivedVia: "web3.eth.personal.sign",
+      signedMessage: session.signedMessage,
+      address: session.address,
     };
-    
-    const accessControlConditions = this.getAccessControlConditions();
-    
+
+    // Inject Lit Action
+    const litActionCode = LIT_ACTION_VERIFY_ACCESS;
+    const jsParams = {
+      userAddress,
+      listingId,
+      packageId,
+    };
+
+    console.log("🔓 Decrypting with Lit Protocol...");
+
     try {
-      console.log('🔓 Decrypting with Lit Protocol...');
-      
       const decryptedString = await LitJsSdk.decryptToString(
         {
-          accessControlConditions,
-          chain: 'ethereum',
+          accessControlConditions: this.getAccessControlConditions(),
+          chain: "ethereum",
           ciphertext,
           dataToEncryptHash,
           authSig,
+          litActionCode, // Pass action code
+          jsParams, // Pass params
         },
         this.litNodeClient!,
       );
-      
-      console.log('✅ Decryption successful, content length:', decryptedString.length);
+
+      console.log("✅ Decryption successful");
       return decryptedString;
-    } catch (error: unknown) {
-      console.error('❌ Lit decryption failed:', error);
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Decryption failed: ${message}`);
+    } catch (error: any) {
+      console.error("❌ Lit decryption failed:", error);
+      // Clean error message
+      if (error.message?.includes("NodeInvalidAuthSig")) {
+        // Clear session to force regenerate next time
+        this.clearSession();
+        throw new Error("Session expired or invalid. Please refresh the page.");
+      }
+      throw error;
     }
   }
 }
