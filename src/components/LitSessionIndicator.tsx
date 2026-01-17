@@ -3,30 +3,30 @@
  * Shows session expiry and provides refresh functionality
  */
 
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Shield, RefreshCw, AlertTriangle, Check } from "lucide-react";
 
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { litService } from '@/services/litProtocol';
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { litService } from "@/services/litProtocol";
 
 const LitSessionIndicator = () => {
   const [sessionExpiry, setSessionExpiry] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [timeRemaining, setTimeRemaining] = useState<string>('');
+  const [timeRemaining, setTimeRemaining] = useState<string>("");
 
   // Check session on mount and periodically
   useEffect(() => {
     const checkSession = () => {
-      const expiry = litService.getSessionExpiry();
-      setSessionExpiry(expiry);
+      // FIX: Lấy timestamp (number) từ service
+      const expiryTimestamp = litService.getSessionExpiry();
+
+      // FIX: Convert number -> Date trước khi set state
+      // Nếu expiryTimestamp là null -> set null
+      // Nếu expiryTimestamp là number -> set new Date()
+      setSessionExpiry(expiryTimestamp ? new Date(expiryTimestamp) : null);
     };
 
     checkSession();
@@ -38,7 +38,7 @@ const LitSessionIndicator = () => {
   // Update time remaining display
   useEffect(() => {
     if (!sessionExpiry) {
-      setTimeRemaining('');
+      setTimeRemaining("");
       return;
     }
 
@@ -48,7 +48,7 @@ const LitSessionIndicator = () => {
       const diff = expiryTime - now;
 
       if (diff <= 0) {
-        setTimeRemaining('Expired');
+        setTimeRemaining("Expired");
         return;
       }
 
@@ -76,10 +76,12 @@ const LitSessionIndicator = () => {
     setIsRefreshing(true);
     try {
       await litService.generateSession();
-      const newExpiry = litService.getSessionExpiry();
-      setSessionExpiry(newExpiry);
+
+      // FIX: Lấy timestamp mới và convert sang Date
+      const newExpiryTimestamp = litService.getSessionExpiry();
+      setSessionExpiry(newExpiryTimestamp ? new Date(newExpiryTimestamp) : null);
     } catch (error) {
-      console.error('Failed to refresh session:', error);
+      console.error("Failed to refresh session:", error);
     } finally {
       setIsRefreshing(false);
     }
@@ -87,20 +89,20 @@ const LitSessionIndicator = () => {
 
   // Determine session status
   const getStatus = () => {
-    if (!sessionExpiry) return 'none';
+    if (!sessionExpiry) return "none";
     const now = Date.now();
     const expiryTime = sessionExpiry.getTime();
     const diff = expiryTime - now;
 
-    if (diff <= 0) return 'expired';
-    if (diff < 86400000) return 'warning'; // < 1 day
-    return 'active';
+    if (diff <= 0) return "expired";
+    if (diff < 86400000) return "warning"; // < 1 day
+    return "active";
   };
 
   const status = getStatus();
 
   // Don't show if no session exists
-  if (status === 'none') {
+  if (status === "none") {
     return null;
   }
 
@@ -118,20 +120,20 @@ const LitSessionIndicator = () => {
                 className="flex items-center"
               >
                 <Badge
-                  variant={status === 'active' ? 'outline' : 'destructive'}
+                  variant={status === "active" ? "outline" : "destructive"}
                   className={`
                     gap-1 cursor-pointer transition-all
-                    ${status === 'active' ? 'border-green-500/50 text-green-500' : ''}
-                    ${status === 'warning' ? 'border-yellow-500 bg-yellow-500/10 text-yellow-500' : ''}
+                    ${status === "active" ? "border-green-500/50 text-green-500" : ""}
+                    ${status === "warning" ? "border-yellow-500 bg-yellow-500/10 text-yellow-500" : ""}
                   `}
                   onClick={handleRefresh}
                 >
-                  {status === 'active' && <Check className="h-3 w-3" />}
-                  {status === 'warning' && <AlertTriangle className="h-3 w-3" />}
-                  {status === 'expired' && <AlertTriangle className="h-3 w-3" />}
-                  
+                  {status === "active" && <Check className="h-3 w-3" />}
+                  {status === "warning" && <AlertTriangle className="h-3 w-3" />}
+                  {status === "expired" && <AlertTriangle className="h-3 w-3" />}
+
                   <Shield className="h-3 w-3" />
-                  
+
                   {isRefreshing ? (
                     <RefreshCw className="h-3 w-3 animate-spin" />
                   ) : (
@@ -145,28 +147,16 @@ const LitSessionIndicator = () => {
         <TooltipContent side="bottom" className="max-w-xs">
           <div className="space-y-2">
             <p className="font-medium">Lit Protocol Session</p>
-            {status === 'active' && (
-              <p className="text-sm text-muted-foreground">
-                Session active. Expires in {timeRemaining}.
-              </p>
+            {status === "active" && (
+              <p className="text-sm text-muted-foreground">Session active. Expires in {timeRemaining}.</p>
             )}
-            {status === 'warning' && (
-              <p className="text-sm text-yellow-500">
-                Session expiring soon! Click to refresh.
-              </p>
+            {status === "warning" && (
+              <p className="text-sm text-yellow-500">Session expiring soon! Click to refresh.</p>
             )}
-            {status === 'expired' && (
-              <p className="text-sm text-destructive">
-                Session expired. Click to create new session.
-              </p>
+            {status === "expired" && (
+              <p className="text-sm text-destructive">Session expired. Click to create new session.</p>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="w-full mt-2"
-            >
+            <Button size="sm" variant="outline" onClick={handleRefresh} disabled={isRefreshing} className="w-full mt-2">
               {isRefreshing ? (
                 <>
                   <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
