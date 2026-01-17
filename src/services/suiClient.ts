@@ -178,14 +178,32 @@ export async function fetchUserAccessPasses(address: string): Promise<AccessPass
 
 /**
  * Fetch seller's listings
+ * NOTE: Listings are shared objects, not owned by seller.
+ * We query ListingCreated events and filter by seller field in the object.
  */
 export async function fetchSellerListings(sellerAddress: string): Promise<ListingWithMeta[]> {
   try {
-    const response = await suiClient.getOwnedObjects({
-      owner: sellerAddress,
-      filter: {
-        StructType: SUI_CONFIG.types.listing,
+    // Query for ListingCreated events to get all listing IDs
+    const eventsResponse = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::ListingCreated`,
       },
+      limit: 100,
+      order: 'descending',
+    });
+
+    const listingIds = eventsResponse.data.map(event => {
+      const parsed = event.parsedJson as { listing_id: string };
+      return parsed.listing_id;
+    });
+
+    if (listingIds.length === 0) {
+      return [];
+    }
+
+    // Fetch all listing objects
+    const objects = await suiClient.multiGetObjects({
+      ids: listingIds,
       options: {
         showContent: true,
       },
@@ -193,10 +211,13 @@ export async function fetchSellerListings(sellerAddress: string): Promise<Listin
 
     const listings: ListingWithMeta[] = [];
 
-    for (const obj of response.data) {
+    for (const obj of objects) {
       if (obj.data?.content?.dataType === 'moveObject') {
         const fields = obj.data.content.fields as Record<string, unknown>;
-        listings.push(parseListing(obj.data.objectId, fields));
+        // Filter by seller address
+        if (fields.seller === sellerAddress) {
+          listings.push(parseListing(obj.data.objectId, fields));
+        }
       }
     }
 
