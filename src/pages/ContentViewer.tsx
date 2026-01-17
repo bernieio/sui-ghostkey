@@ -105,6 +105,7 @@ const ContentViewer = () => {
       console.log('📥 Listing data:', { 
         objectId: listing.objectId,
         walrusBlobId: blobId,
+        litDataHash: listing.litDataHash,
         mimeType: listing.mimeType 
       });
       
@@ -119,45 +120,24 @@ const ContentViewer = () => {
       console.log('📥 Fetching from Walrus:', blobId);
       const encryptedData = await fetchFromWalrus(blobId);
 
-      // Get encryption key from localStorage (stored during upload)
-      // Try multiple key patterns for compatibility
-      let storedKey = localStorage.getItem(`ghostkey_listing_${listingId}`);
+      // Get the Lit encryption data from the listing (stored on-chain in lit_data_hash)
+      // This allows ANY user with valid AccessPass to decrypt, not just the uploader
+      const litEncryptedKeyJson = listing.litDataHash;
       
-      // Fallback: search all localStorage keys for matching blobId
-      if (!storedKey) {
-        console.log('🔍 Key not found by listingId, searching by blobId...');
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key?.startsWith('ghostkey_listing_')) {
-            const data = localStorage.getItem(key);
-            if (data) {
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.blobId === listing.walrusBlobId) {
-                  console.log('✅ Found key by blobId match:', key);
-                  storedKey = data;
-                  break;
-                }
-              } catch (e) {
-                // Ignore parse errors
-              }
-            }
-          }
-        }
-      }
-      
-      if (!storedKey) {
+      if (!litEncryptedKeyJson || litEncryptedKeyJson === 'undefined' || litEncryptedKeyJson.trim() === '') {
         throw new Error(
-          'Decryption key not found. This may happen if you are not the original uploader. ' +
-          'For hackathon demo: Only the content creator can view their own uploads.'
+          'Encryption data (lit_data_hash) is missing from this listing. ' +
+          'The content may have been uploaded with an older version.'
         );
       }
       
-      // Decrypt with stored key
-      const keyData = JSON.parse(storedKey);
+      console.log('🔐 Decrypting with on-chain Lit data...');
+      
+      // Decrypt content using Lit Protocol
+      // The litEncryptedKeyJson contains all data needed to decrypt via Lit Action
       const decrypted = await litService.decryptContent({
         ciphertext: encryptedData,
-        encryptedSymmetricKey: keyData.encryptedSymmetricKey,
+        litEncryptedKeyJson: litEncryptedKeyJson,
         listingId,
         userAddress: account.address,
       });
