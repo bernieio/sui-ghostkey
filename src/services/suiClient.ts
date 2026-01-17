@@ -23,10 +23,39 @@ export default suiClient;
 // ============= Data Fetching =============
 
 /**
+ * Extract string value from Sui field (handles both raw strings and nested objects)
+ * Sui can return strings as either direct values or as { fields: { ... } } objects
+ */
+function extractStringField(field: unknown): string {
+  if (typeof field === 'string') {
+    return field;
+  }
+  // Handle Sui String type which may be wrapped
+  if (typeof field === 'object' && field !== null) {
+    const obj = field as Record<string, unknown>;
+    // Check for direct value
+    if (typeof obj.value === 'string') return obj.value;
+    // Check for fields wrapper (common in Move String types)
+    if (obj.fields && typeof obj.fields === 'object') {
+      const fields = obj.fields as Record<string, unknown>;
+      if (typeof fields.value === 'string') return fields.value;
+      // Some String types use 'bytes' field
+      if (fields.bytes) return String(fields.bytes);
+    }
+  }
+  return '';
+}
+
+/**
  * Parse listing object from Sui response
  * Maps smart contract fields to ListingWithMeta type
  */
 function parseListing(objectId: string, fields: Record<string, unknown>): ListingWithMeta {
+  // Debug: Log raw fields to understand structure
+  console.log('📋 Parsing listing fields:', objectId, JSON.stringify(fields, (_, v) => 
+    typeof v === 'bigint' ? v.toString() : v
+  , 2));
+  
   const basePrice = BigInt(fields.base_price as string || '0');
   const priceSlope = BigInt(fields.price_slope as string || '0');
   const activeRentals = BigInt(fields.active_rentals as string || '0');
@@ -48,6 +77,26 @@ function parseListing(objectId: string, fields: Record<string, unknown>): Listin
       balanceValue = BigInt(balObj.value || '0');
     }
   }
+
+  // Extract string fields using helper (handles Sui's String type wrapping)
+  const walrusBlobId = extractStringField(fields.walrus_blob_id);
+  const litDataHash = extractStringField(fields.lit_data_hash);
+  const mimeType = extractStringField(fields.mime_type) || 'application/octet-stream';
+  
+  // Debug: Log extracted values
+  console.log('📋 Extracted listing values:', {
+    objectId,
+    walrusBlobId: walrusBlobId || 'MISSING!',
+    litDataHash: litDataHash || 'MISSING!',
+    mimeType,
+    seller: fields.seller,
+    isActive: fields.is_active,
+  });
+
+  // Validate required fields
+  if (!walrusBlobId) {
+    console.error('❌ walrus_blob_id is missing or empty! Raw field:', fields.walrus_blob_id);
+  }
   
   return {
     // ListingWithMeta specific fields
@@ -58,14 +107,14 @@ function parseListing(objectId: string, fields: Record<string, unknown>): Listin
     // Base Listing fields
     id: objectId,
     seller: fields.seller as string,
-    walrusBlobId: fields.walrus_blob_id as string, // Fixed: was blob_id, should be walrus_blob_id
-    litDataHash: fields.lit_data_hash as string,
+    walrusBlobId,
+    litDataHash,
     basePrice,
     priceSlope,
     activeRentals,
-    mimeType: fields.mime_type as string || 'application/octet-stream',
+    mimeType,
     balance: balanceValue,
-    isActive: fields.is_active as boolean ?? true, // Fixed: was is_paused (inverted), should be is_active
+    isActive: fields.is_active as boolean ?? true,
     lastDecayTimestamp: BigInt(fields.last_decay_timestamp as string || '0'),
     decayedThisPeriod: BigInt(fields.decayed_this_period as string || '0'),
   };
