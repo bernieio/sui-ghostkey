@@ -4,7 +4,7 @@
  */
 
 import { useState } from 'react';
-import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Upload as UploadIcon,
@@ -65,7 +65,20 @@ interface ProcessingStep {
 const Upload = () => {
   const account = useCurrentAccount();
   const navigate = useNavigate();
-  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const suiClient = useSuiClient();
+  
+  // Use custom execute to get objectChanges in response
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction({
+    execute: async ({ bytes, signature }) =>
+      await suiClient.executeTransactionBlock({
+        transactionBlock: bytes,
+        signature,
+        options: {
+          showRawEffects: true,
+          showObjectChanges: true,
+        },
+      }),
+  });
   
   const [step, setStep] = useState<Step>('file');
   const [form, setForm] = useState<FormData>(INITIAL_FORM);
@@ -151,18 +164,40 @@ const Upload = () => {
         transaction: tx,
       });
 
-      // Use transaction digest as listing identifier for now
-      // Note: In production, parse objectChanges from a full transaction response
-      const newListingId = result.digest;
+      // Parse objectChanges to get the created Listing object ID
+      let newListingId = result.digest; // fallback to digest
+      
+      if (result.objectChanges) {
+        const listingObject = result.objectChanges.find(
+          (change) => change.type === 'created' && 
+          'objectType' in change && 
+          change.objectType?.includes('::marketplace::Listing')
+        );
+        if (listingObject && 'objectId' in listingObject) {
+          newListingId = listingObject.objectId;
+          console.log('✅ Extracted Listing object ID:', newListingId);
+        } else {
+          console.warn('⚠️ Could not find Listing in objectChanges, using digest as fallback');
+        }
+      } else {
+        console.warn('⚠️ No objectChanges in result, using digest as fallback');
+      }
       
       setListingId(newListingId);
       updateProcessingStep('deploy', 'complete');
       
-      // Store encrypted symmetric key locally (for hackathon)
+      // Store encrypted symmetric key locally (for hackathon demo)
+      // Key is stored with the listing object ID for lookup in ContentViewer
       localStorage.setItem(`ghostkey_listing_${newListingId}`, JSON.stringify({
         encryptedSymmetricKey: encryptionResult.encryptedSymmetricKey,
         blobId: walrusResult.blobId,
+        createdAt: Date.now(),
       }));
+      
+      console.log('✅ Listing created successfully:', { 
+        listingId: newListingId, 
+        blobId: walrusResult.blobId 
+      });
       
       setStep('complete');
     } catch (err) {

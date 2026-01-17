@@ -101,13 +101,41 @@ const ContentViewer = () => {
       setViewState('loading');
 
       // Fetch encrypted content from Walrus
+      console.log('📥 Fetching from Walrus:', listing.walrusBlobId);
       const encryptedData = await fetchFromWalrus(listing.walrusBlobId);
 
-      // Get encryption key from localStorage (stored during upload or rent)
-      const storedKey = localStorage.getItem(`ghostkey_listing_${listingId}`);
+      // Get encryption key from localStorage (stored during upload)
+      // Try multiple key patterns for compatibility
+      let storedKey = localStorage.getItem(`ghostkey_listing_${listingId}`);
+      
+      // Fallback: search all localStorage keys for matching blobId
+      if (!storedKey) {
+        console.log('🔍 Key not found by listingId, searching by blobId...');
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key?.startsWith('ghostkey_listing_')) {
+            const data = localStorage.getItem(key);
+            if (data) {
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.blobId === listing.walrusBlobId) {
+                  console.log('✅ Found key by blobId match:', key);
+                  storedKey = data;
+                  break;
+                }
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+      }
       
       if (!storedKey) {
-        throw new Error('Decryption key not found. Please rent access again.');
+        throw new Error(
+          'Decryption key not found. This may happen if you are not the original uploader. ' +
+          'For hackathon demo: Only the content creator can view their own uploads.'
+        );
       }
       
       // Decrypt with stored key
