@@ -1,422 +1,136 @@
-/**
- * Listing Detail Page
- * View listing details and rent access
- */
-
-import { useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit';
-import { motion } from 'framer-motion';
-import { 
-  ArrowLeft,
-  Clock,
-  Users,
-  Wallet,
-  TrendingUp,
-  Lock,
-  ExternalLink,
-  Loader2,
-  AlertCircle,
-  CheckCircle2,
-  Info,
-  Eye
-} from 'lucide-react';
-import { Header } from '@/components/Header';
-import { Footer } from '@/components/Footer';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Slider } from '@/components/ui/slider';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { fetchListing, buildRentAccessTx } from '@/services/suiClient';
-import { formatSui, truncateAddress } from '@/lib/utils';
-import { SUI_CONFIG } from '@/config/sui';
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { useSuiClient, useCurrentAccount, useSignAndExecuteTransactionBlock } from "@mysten/dapp-kit";
+import { TransactionBlock } from "@mysten/sui.js/transactions";
+import { SUI_CONFIG } from "@/config/sui";
+import { Listing } from "@/types/marketplace";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { toast } from "sonner";
+import { Loader2, Tag, Clock, ShieldCheck } from "lucide-react";
 
 const ListingDetail = () => {
-  const { id } = useParams<{ id: string }>();
+  const { id } = useParams();
   const navigate = useNavigate();
+  const suiClient = useSuiClient();
   const account = useCurrentAccount();
-  const queryClient = useQueryClient();
-  const { mutateAsync: signAndExecute, isPending: isTxPending } = useSignAndExecuteTransaction();
-  
-  const [rentalHours, setRentalHours] = useState(24);
-  const [showRentModal, setShowRentModal] = useState(false);
-  const [txStatus, setTxStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
-  const [txError, setTxError] = useState<string | null>(null);
+  const { mutate: signAndExecute } = useSignAndExecuteTransactionBlock();
 
-  const { data: listing, isLoading, error } = useQuery({
-    queryKey: ['listing', id],
-    queryFn: () => fetchListing(id!),
-    enabled: !!id,
-    staleTime: 30 * 1000,
-    refetchInterval: SUI_CONFIG.pollingIntervalMs, // Poll for updates
-  });
+  const [listing, setListing] = useState<Listing | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [renting, setRenting] = useState(false);
 
-  // Calculate rental cost
-  const rentalCost = listing ? listing.currentPrice * BigInt(rentalHours) : 0n;
-  const slippageBuffer = listing ? (listing.currentPrice * 105n) / 100n : 0n; // 5% slippage
+  useEffect(() => {
+    const fetchListing = async () => {
+      if (!id) return;
+      try {
+        const obj = await suiClient.getObject({
+          id,
+          options: { showContent: true },
+        });
+
+        if (obj.data?.content?.dataType === "moveObject") {
+          const fields = obj.data.content.fields as any;
+          setListing({
+            id: obj.data.objectId,
+            seller: fields.seller,
+            base_price: fields.base_price,
+            price_slope: fields.price_slope,
+            active_rentals: fields.active_rentals,
+            walrus_blob_id: fields.walrus_blob_id,
+            lit_data_hash: fields.lit_data_hash,
+            mime_type: fields.mime_type,
+            balance: fields.balance,
+            is_active: fields.is_active,
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching listing:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchListing();
+  }, [id, suiClient]);
 
   const handleRent = async () => {
-    if (!listing || !account) return;
+    if (!account || !listing) {
+      toast.error("Please connect wallet first");
+      return;
+    }
 
-    setTxStatus('pending');
-    setTxError(null);
-
+    setRenting(true);
     try {
-      const tx = buildRentAccessTx(
-        listing.objectId,
-        rentalHours,
-        rentalCost + slippageBuffer // Include slippage in payment amount
-      );
+      const txb = new TransactionBlock();
 
-      await signAndExecute({ transaction: tx });
-      
-      // Invalidate queries to refresh data immediately
-      queryClient.invalidateQueries({ queryKey: ['listing', id] });
-      queryClient.invalidateQueries({ queryKey: ['user-access-passes', account.address] });
-      queryClient.invalidateQueries({ queryKey: ['rental-events'] });
-      queryClient.invalidateQueries({ queryKey: ['seller-listings'] });
-      
-      setTxStatus('success');
-    } catch (err) {
-      console.error('Rent error:', err);
-      setTxError(err instanceof Error ? err.message : 'Transaction failed');
-      setTxStatus('error');
+      // Calculate Price: Base + (Slope * ActiveRentals)
+      // Note: This is simplified. Production should fetch get_current_price from chain
+      const currentPrice = BigInt(listing.base_price) + BigInt(listing.price_slope) * BigInt(listing.active_rentals);
+      const hours = 1; // Default rental 1 hour for MVP
+
+      // Split coin for payment
+      const [coin] = txb.splitCoins(txb.gas, [txb.pure(currentPrice * BigInt(hours))]);
+
+      txb.moveCall({
+        target: `${SUI_CONFIG.packageId}::marketplace::rent_access`,
+        arguments: [txb.object(listing.id), coin, txb.pure(hours), txb.object(SUI_CONFIG.clockObjectId)],
+      });
+
+      signAndExecute(
+        { transactionBlock: txb },
+        {
+          onSuccess: (result) => {
+            console.log("Rental success:", result);
+            toast.success("Rent successful! Redirecting to content...");
+
+            // --- FIX ĐIỀU HƯỚNG TẠI ĐÂY ---
+            // Đợi 2s để blockchain index sự kiện rồi mới chuyển trang
+            setTimeout(() => {
+              navigate(`/view/${listing.id}`); // Đảm bảo listing.id có giá trị
+            }, 2000);
+          },
+          onError: (err) => {
+            console.error("Rental failed:", err);
+            toast.error("Transaction failed. Please try again.");
+          },
+        },
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to construct transaction");
+    } finally {
+      setRenting(false);
     }
   };
 
+  if (loading) return <div className="pt-24 text-center">Loading...</div>;
+  if (!listing) return <div className="pt-24 text-center">Listing not found</div>;
+
   return (
-    <div className="min-h-screen flex flex-col bg-background">
-      <Header />
-      <main className="flex-1 py-8">
-        <div className="container px-4">
-          {/* Back Button */}
-          <Link
-            to="/"
-            className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground mb-8 transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Marketplace
-          </Link>
-
-          {/* Loading */}
-          {isLoading && (
-            <div className="flex items-center justify-center py-20">
-              <Loader2 className="h-8 w-8 text-primary animate-spin" />
-            </div>
-          )}
-
-          {/* Error */}
-          {error && (
-            <Card className="ghost-card border-destructive/50">
-              <CardContent className="flex flex-col items-center py-12">
-                <AlertCircle className="h-12 w-12 text-destructive mb-4" />
-                <h2 className="text-xl font-semibold mb-2">Failed to load listing</h2>
-                <p className="text-muted-foreground">Please try again later</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Listing Details */}
-          {listing && (
-            <div className="grid lg:grid-cols-3 gap-8">
-              {/* Main Content */}
-              <div className="lg:col-span-2 space-y-6">
-                {/* Header Card */}
-                <Card className="ghost-card">
-                  <CardContent className="p-6">
-                    <div className="flex items-start justify-between mb-6">
-                      <div>
-                        <Badge className="mb-4 bg-primary/20 text-primary border-primary/30">
-                          {listing.mimeType}
-                        </Badge>
-                        <h1 className="text-2xl font-bold text-foreground mb-2">
-                          Listing #{truncateAddress(listing.objectId, 4)}
-                        </h1>
-                        <p className="text-muted-foreground">
-                          by <span className="font-mono text-primary">{truncateAddress(listing.seller)}</span>
-                        </p>
-                      </div>
-                      {listing.isActive ? (
-                        <Badge className="bg-primary/20 text-primary border-primary/30">
-                          Active
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">Paused</Badge>
-                      )}
-                    </div>
-
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                      <div className="p-4 rounded-lg bg-ghost-surface">
-                        <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                          <TrendingUp className="h-4 w-4" />
-                          <span className="text-xs">Current Price</span>
-                        </div>
-                        <p className="text-lg font-bold text-primary">
-                          {formatSui(listing.currentPrice)} SUI/hr
-                        </p>
-                      </div>
-                      <div className="p-4 rounded-lg bg-ghost-surface">
-                        <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                          <Users className="h-4 w-4" />
-                          <span className="text-xs">Active Rentals</span>
-                        </div>
-                        <p className="text-lg font-bold text-foreground">
-                          {listing.activeRentals.toString()}
-                        </p>
-                      </div>
-                      <div className="p-4 rounded-lg bg-ghost-surface">
-                        <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                          <Wallet className="h-4 w-4" />
-                          <span className="text-xs">Base Price</span>
-                        </div>
-                        <p className="text-lg font-bold text-foreground">
-                          {formatSui(listing.basePrice)} SUI
-                        </p>
-                      </div>
-                      <div className="p-4 rounded-lg bg-ghost-surface">
-                        <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                          <Clock className="h-4 w-4" />
-                          <span className="text-xs">Price Slope</span>
-                        </div>
-                        <p className="text-lg font-bold text-foreground">
-                          {formatSui(listing.priceSlope)} MIST
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Pricing Info */}
-                <Card className="ghost-card">
-                  <CardHeader>
-                    <CardTitle className="text-lg">Dynamic Pricing</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-start gap-3 p-4 rounded-lg bg-primary/5 border border-primary/20">
-                      <Info className="h-5 w-5 text-primary mt-0.5" />
-                      <div>
-                        <p className="text-sm text-foreground mb-2">
-                          This listing uses dynamic pricing based on demand.
-                        </p>
-                        <p className="text-sm text-muted-foreground font-mono">
-                          Price = {formatSui(listing.basePrice)} + ({listing.activeRentals.toString()} × {formatSui(listing.priceSlope)}) = <span className="text-primary font-bold">{formatSui(listing.currentPrice)} SUI/hr</span>
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* On-chain Link */}
-                <Card className="ghost-card">
-                  <CardContent className="p-4">
-                    <a
-                      href={`https://testnet.suivision.xyz/object/${listing.objectId}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center justify-between p-4 rounded-lg bg-ghost-surface hover:bg-ghost-surface-elevated transition-colors"
-                    >
-                      <div>
-                        <p className="font-medium text-foreground">View on Sui Explorer</p>
-                        <p className="text-sm text-muted-foreground font-mono">
-                          {truncateAddress(listing.objectId, 8)}
-                        </p>
-                      </div>
-                      <ExternalLink className="h-5 w-5 text-muted-foreground" />
-                    </a>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Sidebar - Rent Action */}
-              <div>
-                <Card className="ghost-card sticky top-24">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Lock className="h-5 w-5 text-primary" />
-                      Rent Access
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-6">
-                    {/* Duration Slider */}
-                    <div>
-                      <div className="flex items-center justify-between mb-4">
-                        <span className="text-sm text-muted-foreground">Duration</span>
-                        <span className="font-bold text-foreground">{rentalHours} hours</span>
-                      </div>
-                      <Slider
-                        value={[rentalHours]}
-                        onValueChange={([v]) => setRentalHours(v)}
-                        min={1}
-                        max={168}
-                        step={1}
-                        className="mb-4"
-                      />
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>1 hour</span>
-                        <span>1 week</span>
-                      </div>
-                    </div>
-
-                    {/* Cost Breakdown */}
-                    <div className="p-4 rounded-lg bg-ghost-surface space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Price per hour</span>
-                        <span className="text-foreground">{formatSui(listing.currentPrice)} SUI</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Duration</span>
-                        <span className="text-foreground">{rentalHours} hours</span>
-                      </div>
-                      <div className="border-t border-border pt-2 flex justify-between">
-                        <span className="font-medium text-foreground">Total Cost</span>
-                        <span className="font-bold text-primary text-lg">
-                          {formatSui(rentalCost)} SUI
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Rent Button */}
-                    {account ? (
-                      <Button
-                        onClick={() => setShowRentModal(true)}
-                        disabled={!listing.isActive}
-                        className="w-full ghost-button-primary"
-                      >
-                        {listing.isActive ? 'Rent Access' : 'Listing Paused'}
-                      </Button>
-                    ) : (
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Connect your wallet to rent access
-                        </p>
-                      </div>
-                    )}
-
-                    <p className="text-xs text-muted-foreground text-center">
-                      You'll receive an AccessPass NFT that grants decryption rights
-                    </p>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          )}
-
-          {/* Rent Confirmation Modal */}
-          <Dialog open={showRentModal} onOpenChange={setShowRentModal}>
-            <DialogContent className="bg-background border-border">
-              <DialogHeader>
-                <DialogTitle>Confirm Rental</DialogTitle>
-                <DialogDescription>
-                  You're about to rent access to this encrypted content
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-4 py-4">
-                {txStatus === 'idle' && (
-                  <>
-                    <div className="p-4 rounded-lg bg-ghost-surface space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Duration</span>
-                        <span className="text-foreground">{rentalHours} hours</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Total Cost</span>
-                        <span className="font-bold text-primary">{formatSui(rentalCost)} SUI</span>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-4">
-                      <Button
-                        variant="outline"
-                        className="flex-1"
-                        onClick={() => setShowRentModal(false)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        className="flex-1 ghost-button-primary"
-                        onClick={handleRent}
-                        disabled={isTxPending}
-                      >
-                        {isTxPending ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Confirming...
-                          </>
-                        ) : (
-                          'Confirm & Pay'
-                        )}
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                {txStatus === 'pending' && (
-                  <div className="text-center py-8">
-                    <Loader2 className="h-12 w-12 text-primary animate-spin mx-auto mb-4" />
-                    <p className="text-foreground">Waiting for confirmation...</p>
-                    <p className="text-sm text-muted-foreground">Please approve the transaction in your wallet</p>
-                  </div>
-                )}
-
-                {txStatus === 'success' && (
-                  <div className="text-center py-8">
-                    <motion.div
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-4"
-                    >
-                      <CheckCircle2 className="h-8 w-8 text-primary" />
-                    </motion.div>
-                    <h3 className="text-lg font-semibold text-foreground mb-2">Access Granted!</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Your AccessPass NFT has been minted
-                    </p>
-                    <div className="flex flex-col gap-3">
-                      <Button
-                        className="ghost-button-primary w-full"
-                        onClick={() => navigate(`/view/${id}`)}
-                      >
-                        <Eye className="h-4 w-4 mr-2" />
-                        View Content Now
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => setShowRentModal(false)}
-                      >
-                        Close
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                {txStatus === 'error' && (
-                  <div className="text-center py-8">
-                    <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center mx-auto mb-4">
-                      <AlertCircle className="h-8 w-8 text-destructive" />
-                    </div>
-                    <h3 className="text-lg font-semibold text-foreground mb-2">Transaction Failed</h3>
-                    <p className="text-sm text-destructive mb-4">{txError}</p>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setTxStatus('idle');
-                        setTxError(null);
-                      }}
-                    >
-                      Try Again
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </DialogContent>
-          </Dialog>
+    <div className="min-h-screen pt-24 pb-12 bg-[#0d0d0d] container mx-auto px-4">
+      <Card className="bg-[#1a1a1a] border-gray-800 p-8 max-w-3xl mx-auto">
+        <h1 className="text-3xl font-bold text-white mb-4">AI Prompt Listing</h1>
+        <div className="space-y-4 mb-8">
+          <div className="flex items-center gap-2 text-gray-400">
+            <Tag className="w-4 h-4" /> <span>ID: {listing.id}</span>
+          </div>
+          <div className="flex items-center gap-2 text-gray-400">
+            <ShieldCheck className="w-4 h-4" /> <span>Encrypted on Walrus & Lit</span>
+          </div>
         </div>
-      </main>
-      <Footer />
+
+        {/* Nút Xem Ngay (Nếu đã thuê) */}
+        <div className="flex gap-4">
+          <Button onClick={handleRent} disabled={renting} className="bg-primary text-black font-bold flex-1">
+            {renting ? <Loader2 className="animate-spin" /> : "Rent Access (1 Hour)"}
+          </Button>
+
+          {/* Nút chuyển trang View thủ công */}
+          <Button variant="outline" className="flex-1" onClick={() => navigate(`/view/${listing.id}`)}>
+            Already Rented? View Content
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 };
