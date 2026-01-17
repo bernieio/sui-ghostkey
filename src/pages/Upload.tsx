@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Upload as UploadIcon,
@@ -66,6 +67,7 @@ const Upload = () => {
   const account = useCurrentAccount();
   const navigate = useNavigate();
   const suiClient = useSuiClient();
+  const queryClient = useQueryClient();
   
   // Use custom execute to get objectChanges in response
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction({
@@ -198,6 +200,10 @@ const Upload = () => {
         listingId: newListingId, 
         blobId: walrusResult.blobId 
       });
+      
+      // Invalidate queries to refresh data immediately
+      queryClient.invalidateQueries({ queryKey: ['listings'] });
+      queryClient.invalidateQueries({ queryKey: ['seller-listings', account.address] });
       
       setStep('complete');
     } catch (err) {

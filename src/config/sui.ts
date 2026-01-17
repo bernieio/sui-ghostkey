@@ -8,6 +8,12 @@ export const SUI_CONFIG = {
   network: 'testnet' as const,
   rpcUrl: 'https://fullnode.testnet.sui.io:443',
   
+  // HTTP-only mode: Disable WebSocket subscriptions
+  // Sui testnet public nodes have limited WebSocket support
+  // Use React Query polling instead for data freshness
+  enableWebsocketSubscriptions: false,
+  pollingIntervalMs: 30_000, // 30 seconds
+  
   // Smart contract configuration from Published.toml
   packageId: '0x2aa4851e0a844e82880968c26c559e637ec475ffa9375318dae1f3a330d3075c',
   moduleName: 'marketplace',

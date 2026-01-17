@@ -27,7 +27,7 @@ import { formatSui, truncateAddress } from '@/lib/utils';
 import AccessPassList from '@/components/AccessPassList';
 import ListingActions from '@/components/ListingActions';
 import RevenueChart from '@/components/RevenueChart';
-import { useMarketplaceEvents } from '@/hooks/useSuiEvents';
+import { SUI_CONFIG } from '@/config/sui';
 
 const StatCard = ({ 
   title, 
@@ -60,16 +60,14 @@ const Dashboard = () => {
   const account = useCurrentAccount();
   const queryClient = useQueryClient();
   
-  // Subscribe to real-time marketplace events
-  useMarketplaceEvents({
-    enabled: !!account?.address,
-  });
-  
+  // HTTP-only mode: Use polling instead of WebSocket subscriptions
+  // Data freshness is handled by refetchInterval
   const { data: listings, isLoading, error } = useQuery({
     queryKey: ['seller-listings', account?.address],
     queryFn: () => fetchSellerListings(account?.address || ''),
     enabled: !!account?.address,
     staleTime: 30 * 1000,
+    refetchInterval: SUI_CONFIG.pollingIntervalMs, // Poll for updates
   });
 
   // Calculate stats
