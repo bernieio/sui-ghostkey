@@ -18,7 +18,6 @@ export interface EncryptionResult {
   dataToEncryptHash: string;
 }
 
-// Helper: Base64 -> Hex
 function base64ToHex(base64: string): string {
   try {
     const raw = atob(base64);
@@ -33,6 +32,19 @@ function base64ToHex(base64: string): string {
   }
 }
 
+function hexToBase64(hex: string): string {
+  try {
+    const bytes: number[] = [];
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes.push(parseInt(hex.substr(i, 2), 16));
+    }
+    const binary = String.fromCharCode(...bytes);
+    return btoa(binary);
+  } catch (e) {
+    return hex;
+  }
+}
+
 // Helper: File -> Data URL
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -42,8 +54,6 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
-
-const LIT_ACTION_VERIFY_ACCESS = `(async()=>{const{userAddress,listingId,packageId}=jsParams;const rpcUrl="https://fullnode.testnet.sui.io:443";const body=JSON.stringify({jsonrpc:"2.0",id:1,method:"suix_getOwnedObjects",params:[userAddress,{filter:{StructType:packageId+"::marketplace::AccessPass"},options:{showContent:!0}}]});try{const resp=await fetch(rpcUrl,{method:"POST",headers:{"Content-Type":"application/json"},body});const res=await resp.json();if(!res.result||!res.result.data)return!1;const objects=res.result.data;const now=Date.now();const validPass=objects.find(obj=>{const fields=obj.data.content.fields;const expiry=parseInt(fields.expiry_ms);return fields.listing_id===listingId&&expiry>now});return!!validPass}catch(e){return!1};const hasAccess=await checkSuiAccess();LitActions.setConditions({conditions:[{operator:"always",returnValue:hasAccess}],permanent:!1});LitActions.setResponse({response:JSON.stringify({hasAccess})})})();`;
 
 class LitProtocolService {
   public litNodeClient: LitNodeClient | null = null;
@@ -138,7 +148,6 @@ class LitProtocolService {
     return { ciphertext: base64ToHex(ciphertext), dataToEncryptHash };
   }
 
-  // --- DECRYPT (Accepts HEX) ---
   async decryptFile(
     ciphertextHex: string,
     dataToEncryptHash: string,
@@ -148,6 +157,8 @@ class LitProtocolService {
   ): Promise<string> {
     await this.connect();
     const session = await this.ensureSession();
+
+    const ciphertextBase64 = hexToBase64(ciphertextHex);
 
     const params: any = {
       accessControlConditions: [
@@ -161,7 +172,7 @@ class LitProtocolService {
         },
       ],
       chain: "ethereum",
-      ciphertext: ciphertextHex, // Input is HEX
+      ciphertext: ciphertextBase64,
       dataToEncryptHash,
       authSig: {
         sig: session.signature,
@@ -169,12 +180,9 @@ class LitProtocolService {
         signedMessage: session.signedMessage,
         address: session.address,
       },
-      litActionCode: LIT_ACTION_VERIFY_ACCESS,
-      jsParams: { userAddress, listingId, packageId },
     };
 
     try {
-      // Lit decrypts HEX -> Base64 Data URL
       return await LitJsSdk.decryptToString(params, this.litNodeClient!);
     } catch (error: any) {
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
