@@ -13,6 +13,24 @@ interface UploadResult {
 /**
  * Upload encrypted content to Walrus
  */
+/**
+ * Get the appropriate upload URL based on environment
+ * Uses Vercel serverless function in production to bypass CORS
+ */
+function getUploadUrl(epochs: number): string {
+  // Check if we're in production (Vercel) or development
+  const isProduction = import.meta.env.PROD;
+  
+  if (isProduction) {
+    // Use Vercel serverless function proxy
+    return `/api/walrus-upload?epochs=${epochs}`;
+  }
+  
+  // In development, try direct (may fail due to CORS)
+  // You can also set up a local proxy or use the Vercel dev server
+  return `${WALRUS_CONFIG.publisherUrl}/v1/store?epochs=${epochs}`;
+}
+
 export async function uploadToWalrus(
   content: Uint8Array,
   epochs: number = WALRUS_CONFIG.defaultEpochs
@@ -25,8 +43,13 @@ export async function uploadToWalrus(
     ) as ArrayBuffer;
     const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
     
-    const response = await fetch(`${WALRUS_CONFIG.publisherUrl}/v1/store?epochs=${epochs}`, {
-      method: 'PUT',
+    const uploadUrl = getUploadUrl(epochs);
+    const isProxy = uploadUrl.startsWith('/api/');
+    
+    console.log(`Uploading to Walrus via ${isProxy ? 'proxy' : 'direct'}: ${uploadUrl}`);
+    
+    const response = await fetch(uploadUrl, {
+      method: isProxy ? 'POST' : 'PUT', // Vercel uses POST, Walrus uses PUT
       body: blob,
       headers: {
         'Content-Type': 'application/octet-stream',
@@ -34,7 +57,8 @@ export async function uploadToWalrus(
     });
 
     if (!response.ok) {
-      throw new Error(`Walrus upload failed: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`Walrus upload failed: ${response.status} - ${errorText}`);
     }
 
     const result = await response.json();
@@ -43,10 +67,12 @@ export async function uploadToWalrus(
     const blobInfo = result.newlyCreated?.blobObject || result.alreadyCertified?.blobObject;
     
     if (!blobInfo) {
+      console.error('Invalid Walrus response:', result);
       throw new Error('Invalid Walrus response: no blob info');
     }
 
     const blobId = blobInfo.blobId;
+    console.log('Walrus upload successful, blobId:', blobId);
     
     return {
       blobId,
