@@ -18,6 +18,7 @@ import {
   DollarSign,
   Send,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -45,7 +46,10 @@ import {
   buildResumeListingTx,
   buildUpdatePricingTx,
   buildTransferListingTx,
+  buildDecayRentalsTx,
+  fetchUserAccessPasses,
 } from '@/services/suiClient';
+import { SUI_CONFIG } from '@/config/sui';
 import { formatSui } from '@/lib/utils';
 import type { ListingWithMeta } from '@/types/marketplace';
 
@@ -60,6 +64,9 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showPricingModal, setShowPricingModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showDecayModal, setShowDecayModal] = useState(false);
+  const [expiredPasses, setExpiredPasses] = useState<{ objectId: string; expiryMs: bigint }[]>([]);
+  const [isCheckingExpired, setIsCheckingExpired] = useState(false);
   
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [newBasePrice, setNewBasePrice] = useState('');
@@ -202,6 +209,80 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
     setShowPricingModal(true);
   };
 
+  // Check for expired rentals
+  const checkExpiredRentals = async () => {
+    setIsCheckingExpired(true);
+    try {
+      // Query AccessRented events for this listing to find all rented passes
+      const response = await fetch(SUI_CONFIG.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'suix_queryEvents',
+          params: [
+            {
+              MoveEventType: `${SUI_CONFIG.packageId}::marketplace::AccessRented`,
+            },
+            null,
+            100,
+            true, // descending
+          ],
+        }),
+      });
+
+      const data = await response.json();
+      const now = Date.now();
+      const expired: { objectId: string; expiryMs: bigint }[] = [];
+
+      if (data.result?.data) {
+        for (const event of data.result.data) {
+          const fields = event.parsedJson;
+          if (fields && fields.listing_id === listing.objectId) {
+            const expiryMs = BigInt(fields.expiry_ms);
+            if (now > Number(expiryMs)) {
+              expired.push({
+                objectId: event.id?.txDigest || String(expiryMs),
+                expiryMs,
+              });
+            }
+          }
+        }
+      }
+
+      setExpiredPasses(expired);
+      setShowDecayModal(true);
+    } catch (error) {
+      console.error('Error checking expired rentals:', error);
+      toast.error('Failed to check expired rentals');
+    } finally {
+      setIsCheckingExpired(false);
+    }
+  };
+
+  // Handle decay (cleanup expired rentals)
+  const handleDecay = async () => {
+    if (expiredPasses.length === 0) return;
+
+    setIsProcessing(true);
+    try {
+      const expiryMsList = expiredPasses.map((p) => p.expiryMs);
+      const tx = buildDecayRentalsTx(listing.objectId, expiryMsList);
+      await signAndExecute({ transaction: tx });
+
+      toast.success(`Cleaned up ${expiredPasses.length} expired rental(s)`);
+      setShowDecayModal(false);
+      setExpiredPasses([]);
+      onSuccess?.();
+    } catch (error) {
+      console.error('Decay error:', error);
+      toast.error('Failed to cleanup expired rentals');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <>
       <DropdownMenu>
@@ -268,6 +349,18 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
           >
             <Send className="h-4 w-4 mr-2" />
             Transfer Ownership
+          </DropdownMenuItem>
+
+          <DropdownMenuItem
+            onClick={checkExpiredRentals}
+            disabled={Number(listing.activeRentals) === 0 || isCheckingExpired}
+          >
+            {isCheckingExpired ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-2" />
+            )}
+            Cleanup Expired ({listing.activeRentals.toString()})
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -540,6 +633,77 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
                       <>
                         <Send className="h-4 w-4 mr-2" />
                         Transfer Ownership
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
+
+      {/* Decay Modal */}
+      <AnimatePresence>
+        {showDecayModal && (
+          <Dialog open={showDecayModal} onOpenChange={setShowDecayModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Trash2 className="h-5 w-5 text-primary" />
+                    Cleanup Expired Rentals
+                  </DialogTitle>
+                  <DialogDescription>
+                    Remove expired rental records to reduce gas costs and optimize your listing.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="py-4 space-y-4">
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <p className="text-sm text-muted-foreground">Expired Rentals Found</p>
+                    <p className="text-2xl font-bold text-primary">
+                      {expiredPasses.length}
+                    </p>
+                  </div>
+
+                  {expiredPasses.length > 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      This will remove expired rental records from the blockchain, reducing storage costs
+                      and optimizing your listing performance.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No expired rentals found for this listing. All current rentals are still active.
+                    </p>
+                  )}
+                </div>
+
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowDecayModal(false)}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleDecay}
+                    disabled={expiredPasses.length === 0 || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Cleanup ({expiredPasses.length})
                       </>
                     )}
                   </Button>

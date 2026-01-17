@@ -20,6 +20,21 @@ export const LIT_CONFIG = {
   // Retry configuration
   maxRetries: 3,
   retryDelayMs: 1000,
+  
+  // Burner wallet private key (from environment variable or fallback)
+  // This wallet should have tstLPX tokens on DatilTest network
+  burnerPrivateKey: import.meta.env.VITE_LIT_BURNER_PRIVATE_KEY || '',
+} as const;
+
+/**
+ * Capacity delegation configuration for Lit Action execution
+ * Enables pay-as-you-go model for executing Lit Actions
+ */
+export const LIT_CAPACITY_CONFIG = {
+  // Number of uses allowed per delegation
+  uses: 100,
+  // Period in seconds (24 hours)
+  periodSeconds: 86400,
 } as const;
 
 /**
