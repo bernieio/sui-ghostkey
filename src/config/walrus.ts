@@ -1,32 +1,30 @@
-/**
- * Walrus Storage Configuration for GhostKey
- * Decentralized storage on Sui
- */
-
-// Cấu hình danh sách Node Walrus theo tầng ưu tiên
 export const WALRUS_CONFIG = {
+  // Danh sách Node (Failover)
   PUBLISHERS: [
-    "https://publisher.walrus-testnet.walrus.space", // Tầng 1 (Gốc)
-    "https://sui-walrus-testnet-publisher.bwarelabs.com", // Tầng 2
-    "https://publisher.testnet.walrus.atalma.io", // Tầng 3
-    "https://walrus-testnet.blockscope.net:11444", // Tầng 4
-    "https://walrus-testnet-publisher.chainbase.online", // Tầng 5
+    "https://publisher.walrus-testnet.walrus.space",
+    "https://sui-walrus-testnet-publisher.bwarelabs.com",
+    "https://publisher.testnet.walrus.atalma.io",
+    "https://walrus-testnet.blockscope.net:11444",
+    "https://walrus-testnet-publisher.chainbase.online",
   ],
   AGGREGATORS: [
-    "https://aggregator.walrus-testnet.walrus.space", // Tầng 1 (Gốc)
-    "https://sui-walrus-tn-aggregator.bwarelabs.com", // Tầng 2
-    "https://aggregator.testnet.walrus.atalma.io", // Tầng 3
-    "https://walrus-testnet.blockscope.net", // Tầng 4
-    "https://walrus-testnet-aggregator.brightlystake.com", // Tầng 5
+    "https://aggregator.walrus-testnet.walrus.space",
+    "https://sui-walrus-tn-aggregator.bwarelabs.com",
+    "https://aggregator.testnet.walrus.atalma.io",
+    "https://walrus-testnet.blockscope.net",
+    "https://walrus-testnet-aggregator.brightlystake.com",
+  ],
+
+  // Các tham số cấu hình mặc định (Fix lỗi TS2339)
+  DEFAULT_EPOCHS: 5,
+  MAX_FILE_SIZE_MB: 10,
+  SUPPORTED_MIME_TYPES: [
+    "text/plain",
+    "text/markdown",
+    "application/json",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "application/pdf",
   ],
 };
-
-/**
- * Get the URL to retrieve a blob from Walrus
- */
-export const getWalrusBlobUrl = (blobId: string): string => {
-  // Correct aggregator endpoint for blob retrieval
-  return `${WALRUS_CONFIG.aggregatorUrl}/v1/blobs/${blobId}`;
-};
-
-export default WALRUS_CONFIG;

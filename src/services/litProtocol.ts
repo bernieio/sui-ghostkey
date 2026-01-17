@@ -14,14 +14,15 @@ export interface SessionData {
 }
 
 export interface EncryptionResult {
-  ciphertext: string; // HEX String
+  ciphertext: string; // HEX String (Safe for Walrus)
   dataToEncryptHash: string;
 }
 
 // --- HELPERS ---
 
 /**
- * Chuyển Base64 sang Hex an toàn
+ * Chuyển đổi Base64 sang Hex String an toàn.
+ * Giúp tránh lỗi encoding khi lưu trữ trên Walrus và lỗi "Failed to hex decode" của Lit.
  */
 function base64ToHex(base64: string): string {
   try {
@@ -33,13 +34,13 @@ function base64ToHex(base64: string): string {
     }
     return result;
   } catch (e) {
-    console.error("Base64 to Hex failed:", e);
-    return base64;
+    console.warn("Base64 to Hex conversion warning:", e);
+    return base64; // Fallback nếu không convert được
   }
 }
 
 /**
- * Convert File to Data URL
+ * Chuyển File sang Data URL để bảo toàn nội dung nhị phân (ảnh, pdf...)
  */
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -50,7 +51,8 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-// LIT ACTION CODE (Giữ nguyên logic verify)
+// --- LIT ACTION CODE ---
+// Chạy trên Lit Node để kiểm tra quyền sở hữu NFT trên Sui
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
@@ -77,6 +79,7 @@ const LIT_ACTION_VERIFY_ACCESS = `
         body
       });
       const res = await resp.json();
+      
       if (!res.result || !res.result.data) return false;
 
       const objects = res.result.data;
@@ -103,12 +106,15 @@ class LitProtocolService {
   private burnerWallet: ethers.Wallet | null = null;
   private isConnecting: boolean = false;
 
+  // --- CONNECT ---
   async connect(): Promise<LitNodeClient> {
     if (this.litNodeClient?.ready) return this.litNodeClient;
+
     if (this.isConnecting) {
       while (this.isConnecting) await new Promise((r) => setTimeout(r, 100));
       if (this.litNodeClient?.ready) return this.litNodeClient;
     }
+
     this.isConnecting = true;
     try {
       this.litNodeClient = new LitNodeClient({
@@ -117,11 +123,15 @@ class LitProtocolService {
       });
       await this.litNodeClient.connect();
       return this.litNodeClient;
+    } catch (error) {
+      console.error("❌ Failed to connect to Lit:", error);
+      throw error;
     } finally {
       this.isConnecting = false;
     }
   }
 
+  // --- CONDITIONS ---
   private getUnifiedAccessControlConditions() {
     return [
       {
@@ -130,33 +140,51 @@ class LitProtocolService {
         chain: "ethereum",
         method: "",
         parameters: [":userAddress"],
-        returnValueTest: { comparator: "=", value: ":userAddress" },
+        returnValueTest: {
+          comparator: "=",
+          value: ":userAddress",
+        },
       },
     ];
   }
 
-  // --- SESSION MANAGE (Giữ nguyên logic SIWE chuẩn) ---
+  // --- SESSION MANAGEMENT ---
   private getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) return this.burnerWallet;
     const storedKey = localStorage.getItem(BURNER_WALLET_KEY);
-    if (storedKey) return (this.burnerWallet = new ethers.Wallet(storedKey));
+    if (storedKey) {
+      this.burnerWallet = new ethers.Wallet(storedKey);
+      return this.burnerWallet;
+    }
     this.burnerWallet = ethers.Wallet.createRandom();
     localStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
     return this.burnerWallet;
   }
 
+  private hasValidSession(): boolean {
+    const sessionData = this.getStoredSession();
+    if (!sessionData) return false;
+    return Date.now() < sessionData.expiry;
+  }
+
   private getStoredSession(): SessionData | null {
     try {
       const stored = localStorage.getItem(SESSION_KEY);
-      return stored && Date.now() < JSON.parse(stored).expiry ? JSON.parse(stored) : null;
+      if (!stored) return null;
+      return JSON.parse(stored);
     } catch {
       return null;
     }
   }
 
+  private storeSession(data: SessionData): void {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+  }
+
   private async createSessionInternal(): Promise<SessionData> {
     const wallet = this.getBurnerWallet();
     const address = await wallet.getAddress();
+
     const expiryDays = 7;
     const expiration = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
     const issuedAt = new Date().toISOString();
@@ -165,30 +193,54 @@ class LitProtocolService {
     const origin = window.location.origin || "http://localhost:5173";
     const nonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
 
-    const siweMessage = `${domain} wants you to sign in with your Ethereum account:\n${address}\n\nAuthorize GhostKey access to Lit Protocol.\n\nURI: ${origin}\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: ${issuedAt}\nExpiration Time: ${expiration}`;
+    const siweMessage = `${domain} wants you to sign in with your Ethereum account:
+${address}
+
+Authorize GhostKey access to Lit Protocol.
+
+URI: ${origin}
+Version: 1
+Chain ID: 1
+Nonce: ${nonce}
+Issued At: ${issuedAt}
+Expiration Time: ${expiration}`;
 
     const signature = await wallet.signMessage(siweMessage);
-    const sessionData = { signature, address, expiry: Date.parse(expiration), signedMessage: siweMessage };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionData));
+
+    const sessionData: SessionData = {
+      signature,
+      address,
+      expiry: Date.parse(expiration),
+      signedMessage: siweMessage,
+    };
+
+    this.storeSession(sessionData);
     return sessionData;
   }
 
-  async ensureSession(): Promise<SessionData> {
-    const session = this.getStoredSession();
-    return session ? session : this.createSessionInternal();
-  }
+  // --- PUBLIC API ---
 
   getSessionExpiry(): number | null {
-    return this.getStoredSession()?.expiry || null;
+    const session = this.getStoredSession();
+    return session ? session.expiry : null;
   }
-  async generateSession() {
+
+  async generateSession(): Promise<SessionData> {
     return this.createSessionInternal();
   }
-  async verifyAccess() {
+
+  async ensureSession(): Promise<SessionData> {
+    if (this.hasValidSession()) {
+      return this.getStoredSession()!;
+    }
+    return this.createSessionInternal();
+  }
+
+  async verifyAccess(): Promise<boolean> {
     return true;
   }
 
-  // --- ENCRYPT (UPDATED: RETURN HEX) ---
+  // --- ENCRYPT ---
   async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
     const session = await this.ensureSession();
@@ -200,27 +252,33 @@ class LitProtocolService {
       address: session.address,
     };
 
+    // 1. Chuyển File -> Data URL (để giữ nguyên binary data)
     const fileContentBase64 = await fileToDataUrl(file);
 
-    const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
-      {
-        accessControlConditions: this.getUnifiedAccessControlConditions(),
-        dataToEncrypt: fileContentBase64,
-        authSig,
-        chain: "ethereum",
-      },
-      this.litNodeClient!,
-    );
+    // 2. Cấu hình params (Dùng 'as any' để fix lỗi TS2353)
+    const params: any = {
+      accessControlConditions: this.getUnifiedAccessControlConditions(),
+      dataToEncrypt: fileContentBase64,
+      authSig,
+      chain: "ethereum",
+    };
 
-    // FIX: Convert Base64 to Hex immediately for safe storage
+    // 3. Encrypt (Trả về Base64 ciphertext)
+    const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(params, this.litNodeClient!);
+
+    // 4. Convert Base64 Ciphertext -> HEX String (Quan trọng!)
+    // Lit Decrypt yêu cầu Hex, và Hex an toàn hơn khi upload HTTP
     const ciphertextHex = base64ToHex(ciphertext);
 
-    return { ciphertext: ciphertextHex, dataToEncryptHash };
+    return {
+      ciphertext: ciphertextHex,
+      dataToEncryptHash,
+    };
   }
 
-  // --- DECRYPT (UPDATED: EXPECT HEX) ---
+  // --- DECRYPT ---
   async decryptFile(
-    ciphertextHex: string, // Expect Hex String
+    ciphertextHex: string, // Input bắt buộc là HEX String
     dataToEncryptHash: string,
     listingId: string,
     packageId: string,
@@ -236,24 +294,30 @@ class LitProtocolService {
       address: session.address,
     };
 
-    console.log("🔓 Decrypting Hex Length:", ciphertextHex.length);
+    // 1. Cấu hình params (Dùng 'as any' để fix lỗi TS2353)
+    const params: any = {
+      accessControlConditions: this.getUnifiedAccessControlConditions(),
+      chain: "ethereum",
+      ciphertext: ciphertextHex, // Truyền Hex vào đây
+      dataToEncryptHash,
+      authSig,
+      litActionCode: LIT_ACTION_VERIFY_ACCESS,
+      jsParams: {
+        userAddress,
+        listingId,
+        packageId,
+      },
+    };
 
     try {
-      const decryptedDataUrl = await LitJsSdk.decryptToString(
-        {
-          accessControlConditions: this.getUnifiedAccessControlConditions(),
-          chain: "ethereum",
-          ciphertext: ciphertextHex, // Pass Hex
-          dataToEncryptHash,
-          authSig,
-          litActionCode: LIT_ACTION_VERIFY_ACCESS,
-          jsParams: { userAddress, listingId, packageId },
-        },
-        this.litNodeClient!,
-      );
-      return decryptedDataUrl;
+      // 2. Decrypt
+      const decryptedDataUrl = await LitJsSdk.decryptToString(params, this.litNodeClient!);
+
+      return decryptedDataUrl; // Trả về Data URL (vd: "data:image/png;base64,...")
     } catch (error: any) {
+      // Auto-recover session nếu lỗi AuthSig
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
+        console.warn("AuthSig invalid, regenerating session...");
         localStorage.removeItem(SESSION_KEY);
         return this.decryptFile(ciphertextHex, dataToEncryptHash, listingId, packageId, userAddress);
       }

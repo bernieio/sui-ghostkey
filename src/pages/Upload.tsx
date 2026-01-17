@@ -4,7 +4,7 @@ import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-ki
 import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CONFIG } from "@/config/sui";
 import { litService } from "@/services/litProtocol";
-import { uploadToWalrus } from "@/services/walrus"; // Service mới có Failover
+import { uploadToWalrus } from "@/services/walrus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -50,10 +50,9 @@ const Upload = () => {
     try {
       // 2. Encrypt File (Lit Protocol)
       // Output: ciphertext (HEX String) và dataToEncryptHash
-      // Chúng ta dùng Hex để upload lên Walrus nhằm tránh lỗi encoding ký tự lạ
       toast.loading("Encrypting content...", { id: toastId });
 
-      const tempId = crypto.randomUUID(); // ID tạm cho encryption conditions
+      const tempId = crypto.randomUUID(); // ID tạm dùng cho điều kiện encryption
 
       const { ciphertext, dataToEncryptHash } = await litService.encryptFile(
         file,
@@ -65,9 +64,10 @@ const Upload = () => {
       console.log("🔐 Encryption done. Ciphertext Hex Length:", ciphertext.length);
 
       // 3. Upload to Walrus (Failover Mechanism)
-      // Upload chuỗi HEX lên Walrus với MIME type là text/plain
+      // Upload chuỗi HEX lên Walrus (An toàn tuyệt đối về encoding so với Base64)
       toast.loading("Uploading encrypted data to Walrus...", { id: toastId });
 
+      // uploadToWalrus nhận vào string (Hex) và trả về string (Blob ID)
       const blobId = await uploadToWalrus(ciphertext, "text/plain");
 
       console.log("📦 Walrus Upload done. Blob ID:", blobId);
@@ -87,7 +87,7 @@ const Upload = () => {
           txb.pure.string(dataToEncryptHash), // Lit Data Hash
           txb.pure.u64(priceInMist), // Base Price
           txb.pure.u64(slopeInMist), // Price Slope
-          txb.pure.string(file.type), // MIME Type gốc (để hiển thị đúng bên Viewer)
+          txb.pure.string(file.type || "text/plain"), // MIME Type gốc để hiển thị bên Viewer
         ],
       });
 
