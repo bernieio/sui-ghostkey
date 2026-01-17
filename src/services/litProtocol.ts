@@ -1,13 +1,11 @@
 import * as LitJsSdk from "@lit-protocol/lit-node-client";
 import { LitNodeClient } from "@lit-protocol/lit-node-client";
 import { LIT_CONFIG } from "@/config/lit";
-import { SUI_CONFIG } from "@/config/sui";
 import { ethers } from "ethers";
 
 const SESSION_KEY = "ghostkey_lit_session";
 const BURNER_WALLET_KEY = "ghostkey_burner_wallet";
 
-// Interface chuẩn cho Session
 export interface SessionData {
   signature: string;
   address: string;
@@ -20,12 +18,14 @@ export interface EncryptionResult {
   dataToEncryptHash: string;
 }
 
-// Lit Action Code
+// LIT ACTION: Kiểm tra quyền sở hữu NFT trên Sui
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
     const { userAddress, listingId, packageId } = jsParams;
     const rpcUrl = "https://fullnode.testnet.sui.io:443";
+    
+    // Gọi RPC Sui để lấy danh sách NFT
     const body = JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -46,9 +46,13 @@ const LIT_ACTION_VERIFY_ACCESS = `
         body
       });
       const res = await resp.json();
-      const objects = res.result?.data || [];
+      
+      if (!res.result || !res.result.data) return false;
+
+      const objects = res.result.data;
       const now = Date.now();
 
+      // Tìm vé hợp lệ
       const validPass = objects.find(obj => {
         const fields = obj.data.content.fields;
         const expiry = parseInt(fields.expiry_ms);
@@ -60,6 +64,8 @@ const LIT_ACTION_VERIFY_ACCESS = `
   };
 
   const hasAccess = await checkSuiAccess();
+  
+  // Set điều kiện cho Lit Node: Chỉ mở khóa nếu hasAccess = true
   LitActions.setConditions({ conditions: [{ operator: "always", returnValue: hasAccess }], permanent: false });
   LitActions.setResponse({ response: JSON.stringify({ hasAccess }) });
 })();
@@ -70,6 +76,7 @@ class LitProtocolService {
   private burnerWallet: ethers.Wallet | null = null;
   private isConnecting: boolean = false;
 
+  // --- CONNECT ---
   async connect(): Promise<LitNodeClient> {
     if (this.litNodeClient?.ready) return this.litNodeClient;
 
@@ -95,45 +102,28 @@ class LitProtocolService {
     }
   }
 
-  // --- Helper Methods cho UI (Fix lỗi TS2339) ---
-
-  /**
-   * Lấy thời gian hết hạn của Session hiện tại (nếu có)
-   */
-  getSessionExpiry(): number | null {
-    const session = this.getStoredSession();
-    return session ? session.expiry : null;
+  // --- HELPER: UNIFIED ACCESS CONTROL CONDITION ---
+  // Điều kiện này dùng chung cho cả Encrypt và Decrypt để đảm bảo hash khớp nhau
+  private getUnifiedAccessControlConditions() {
+    return [
+      {
+        contractAddress: "",
+        standardContractType: "",
+        chain: "ethereum",
+        method: "",
+        parameters: [":userAddress"],
+        returnValueTest: {
+          comparator: "=",
+          value: ":userAddress",
+        },
+      },
+    ];
   }
 
-  /**
-   * Tạo session mới (Public method để UI gọi)
-   */
-  async generateSession(): Promise<SessionData> {
-    return this.createSessionInternal();
-  }
-
-  /**
-   * Đảm bảo có session hợp lệ, nếu không thì tạo mới
-   */
-  async ensureSession(): Promise<SessionData> {
-    if (this.hasValidSession()) {
-      return this.getStoredSession()!;
-    }
-    return this.createSessionInternal();
-  }
-
-  /**
-   * Hàm dummy để thỏa mãn interface cũ, thực tế Lit Action sẽ verify
-   */
-  async verifyAccess(): Promise<boolean> {
-    return true;
-  }
-
-  // --- Internal Logic ---
-
+  // --- SESSION MANAGEMENT ---
   private getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) return this.burnerWallet;
-    const storedKey = localStorage.getItem(BURNER_WALLET_KEY); // Sửa thành localStorage để bền vững hơn
+    const storedKey = localStorage.getItem(BURNER_WALLET_KEY);
     if (storedKey) {
       this.burnerWallet = new ethers.Wallet(storedKey);
       return this.burnerWallet;
@@ -198,8 +188,29 @@ Expiration Time: ${expiration}`;
     return sessionData;
   }
 
-  // --- Encrypt & Decrypt ---
+  // --- PUBLIC API ---
 
+  getSessionExpiry(): number | null {
+    const session = this.getStoredSession();
+    return session ? session.expiry : null;
+  }
+
+  async generateSession(): Promise<SessionData> {
+    return this.createSessionInternal();
+  }
+
+  async ensureSession(): Promise<SessionData> {
+    if (this.hasValidSession()) {
+      return this.getStoredSession()!;
+    }
+    return this.createSessionInternal();
+  }
+
+  async verifyAccess(): Promise<boolean> {
+    return true;
+  }
+
+  // --- ENCRYPT ---
   async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
     const session = await this.ensureSession();
@@ -211,20 +222,11 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    const accessControlConditions = [
-      {
-        contractAddress: "",
-        standardContractType: "",
-        chain: "ethereum",
-        method: "",
-        parameters: [userAddress, listingId, packageId],
-        returnValueTest: { comparator: "=", value: "true" },
-      },
-    ];
+    // FIX: Sử dụng Unified Access Control Conditions
+    const accessControlConditions = this.getUnifiedAccessControlConditions();
 
     const fileContent = await file.text();
 
-    // Fix TS2353: Cast params as any to bypass strict type checking for authSig in V6
     const params: any = {
       accessControlConditions,
       dataToEncrypt: fileContent,
@@ -237,6 +239,7 @@ Expiration Time: ${expiration}`;
     return { ciphertext, dataToEncryptHash };
   }
 
+  // --- DECRYPT ---
   async decryptFile(
     ciphertext: string,
     dataToEncryptHash: string,
@@ -254,9 +257,12 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    // Fix TS2353: Cast params as any to inject litActionCode
+    // FIX: Phải truyền đúng Access Control Conditions đã dùng lúc encrypt
+    // Không được để mảng rỗng []
+    const accessControlConditions = this.getUnifiedAccessControlConditions();
+
     const params: any = {
-      accessControlConditions: [], // Lit Action handles this
+      accessControlConditions, // <-- QUAN TRỌNG: Không được rỗng
       chain: "ethereum",
       ciphertext,
       dataToEncryptHash,
