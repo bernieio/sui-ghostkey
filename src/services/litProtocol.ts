@@ -1,303 +1,256 @@
-/**
- * Lit Protocol Service for GhostKey
- * FIXED: SIWE Compliant AuthSig Generation
- */
-
 import * as LitJsSdk from "@lit-protocol/lit-node-client";
-import { LitNodeClient } from "@lit-protocol/lit-node-client";
-import { LIT_CONFIG } from "@/config/lit";
-import { SUI_CONFIG } from "@/config/sui";
+import { LitNetwork } from "@lit-protocol/constants";
 import { ethers } from "ethers";
 
-// Session storage keys
-const SESSION_KEY = "ghostkey_lit_session";
-const BURNER_WALLET_KEY = "ghostkey_burner_wallet";
+// --- CONSTANTS ---
+const LIT_NETWORK = LitNetwork.DatilTest;
+const BURNER_WALLET_KEY = "ghostkey_burner_wallet_pk";
 
-// Cập nhật interface để lưu luôn message gốc đã ký
-interface SessionData {
-  signature: string;
-  address: string;
-  expiry: number;
-  signedMessage: string; // <--- QUAN TRỌNG: Lưu message gốc để gửi lại cho Lit
-}
-
-export interface EncryptionResult {
-  ciphertext: string;
-  dataToEncryptHash: string;
-}
-
-// Lit Action code giữ nguyên
-const LIT_ACTION_VERIFY_ACCESS = `
+// --- LIT ACTION CODE ---
+// Code này chạy trên Lit Nodes để verify NFT trên Sui
+const LIT_ACTION_CODE = `
 (async () => {
-  const SUI_RPC_URL = "https://fullnode.testnet.sui.io:443";
-  const { userAddress, listingId, packageId } = jsParams;
+  const checkSuiAccess = async () => {
+    const { userAddress, listingId, packageId } = jsParams;
+    const rpcUrl = "https://fullnode.testnet.sui.io:443";
+    
+    // Gọi RPC Sui: suix_getOwnedObjects
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "suix_getOwnedObjects",
+      params: [
+        userAddress,
+        {
+          filter: { StructType: packageId + "::marketplace::AccessPass" },
+          options: { showContent: true }
+        }
+      ]
+    });
+
+    try {
+      const resp = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body
+      });
+      const res = await resp.json();
+      
+      if (!res.result || !res.result.data) {
+        return false;
+      }
+
+      const objects = res.result.data;
+      const now = Date.now();
+
+      // Tìm AccessPass hợp lệ
+      const validPass = objects.find(obj => {
+        const fields = obj.data.content.fields;
+        const expiry = parseInt(fields.expiry_ms);
+        
+        // Debug log (chỉ hiện trong Lit Action Log nếu debug mode on)
+        // console.log("Checking pass:", fields.listing_id, expiry);
+
+        return fields.listing_id === listingId && expiry > now;
+      });
+      
+      return !!validPass;
+    } catch (e) {
+      return false; 
+    }
+  };
+
+  const hasAccess = await checkSuiAccess();
   
-  try {
-    const response = await fetch(SUI_RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "suix_getOwnedObjects",
-        params: [
-          userAddress,
-          {
-            filter: { StructType: packageId + "::marketplace::AccessPass" },
-            options: { showContent: true }
-          }
-        ]
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!data.result?.data) {
-      LitActions.setResponse({ response: JSON.stringify({ hasAccess: false, reason: "No access passes found" }) });
-      return;
-    }
-    
-    const now = Date.now();
-    
-    const validPass = data.result.data.find(obj => {
-      if (!obj.data?.content?.fields) return false;
-      const fields = obj.data.content.fields;
-      const expiry = parseInt(fields.expiry_ms || "0");
-      return fields.listing_id === listingId && expiry > now;
-    });
-    
-    if (validPass) {
-      const expiryMs = parseInt(validPass.data.content.fields.expiry_ms);
-      LitActions.setResponse({ response: JSON.stringify({ hasAccess: true, expiryMs }) });
-    } else {
-      LitActions.setResponse({ response: JSON.stringify({ hasAccess: false, reason: "No valid access pass for this listing" }) });
-    }
-  } catch (error) {
-    LitActions.setResponse({ response: JSON.stringify({ hasAccess: false, reason: "Verification error: " + error.message }) });
-  }
+  // Set điều kiện cho Lit Node
+  LitActions.setConditions({ conditions: [{ operator: "always", returnValue: hasAccess }], permanent: false });
+  LitActions.setResponse({ response: JSON.stringify({ hasAccess }) });
 })();
 `;
 
-class LitProtocolService {
-  private litNodeClient: LitNodeClient | null = null;
-  private burnerWallet: ethers.Wallet | null = null;
-  private isConnecting: boolean = false;
+// --- CLASS SERVICE ---
+class LitService {
+  private client: LitJsSdk.LitNodeClient;
+  private isConnected = false;
 
-  async connect(): Promise<LitNodeClient> {
-    if (this.litNodeClient?.ready) return this.litNodeClient;
+  constructor() {
+    this.client = new LitJsSdk.LitNodeClient({
+      litNetwork: LIT_NETWORK,
+      debug: false,
+    });
+  }
 
-    if (this.isConnecting) {
-      while (this.isConnecting) await new Promise((r) => setTimeout(r, 100));
-      if (this.litNodeClient?.ready) return this.litNodeClient;
-    }
-
-    this.isConnecting = true;
-    try {
-      this.litNodeClient = new LitNodeClient({
-        litNetwork: LIT_CONFIG.network,
-        debug: false,
-      });
-      await this.litNodeClient.connect();
-      console.log("✅ Connected to Lit Protocol network:", LIT_CONFIG.network);
-      return this.litNodeClient;
-    } catch (error) {
-      console.error("❌ Failed to connect to Lit Protocol:", error);
-      throw error;
-    } finally {
-      this.isConnecting = false;
+  async connect() {
+    if (!this.isConnected) {
+      await this.client.connect();
+      this.isConnected = true;
+      console.log("✅ Lit Protocol Connected:", LIT_NETWORK);
     }
   }
 
-  getBurnerWallet(): ethers.Wallet {
-    if (this.burnerWallet) return this.burnerWallet;
-    if (LIT_CONFIG.burnerPrivateKey) {
-      this.burnerWallet = new ethers.Wallet(LIT_CONFIG.burnerPrivateKey);
-      return this.burnerWallet;
+  /**
+   * Lấy Burner Wallet từ localStorage hoặc tạo mới.
+   * Giữ ví này cố định để session không bị reset khi reload trang.
+   */
+  private getBurnerWallet(): ethers.Wallet {
+    let privateKey = localStorage.getItem(BURNER_WALLET_KEY);
+    if (!privateKey) {
+      const wallet = ethers.Wallet.createRandom();
+      privateKey = wallet.privateKey;
+      localStorage.setItem(BURNER_WALLET_KEY, privateKey);
     }
-    const storedKey = sessionStorage.getItem(BURNER_WALLET_KEY);
-    if (storedKey) {
-      this.burnerWallet = new ethers.Wallet(storedKey);
-      return this.burnerWallet;
-    }
-    this.burnerWallet = ethers.Wallet.createRandom();
-    sessionStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
-    return this.burnerWallet;
+    return new ethers.Wallet(privateKey);
   }
 
-  hasValidSession(): boolean {
-    const sessionData = this.getStoredSession();
-    if (!sessionData) return false;
-    return Date.now() < sessionData.expiry;
-  }
-
-  private getStoredSession(): SessionData | null {
-    try {
-      const stored = localStorage.getItem(SESSION_KEY);
-      if (!stored) return null;
-      return JSON.parse(stored);
-    } catch {
-      return null;
-    }
-  }
-
-  private storeSession(data: SessionData): void {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(data));
-  }
-
-  clearSession(): void {
-    localStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(BURNER_WALLET_KEY);
-    this.burnerWallet = null;
-  }
-
-  // --- FIX: GENERATE STANDARD SIWE MESSAGE ---
-  async generateSession(): Promise<SessionData> {
+  /**
+   * Tạo AuthSig chuẩn SIWE (EIP-4361) thủ công.
+   * Khắc phục hoàn toàn lỗi "Missing Preamble Line".
+   */
+  async getAuthSig() {
     const wallet = this.getBurnerWallet();
-    const expiryDays = LIT_CONFIG.sessionDurationDays || 7;
-    const expiration = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
-    const issuedAt = new Date().toISOString();
+    const address = await wallet.getAddress();
 
-    // Construct valid SIWE message
-    const domain = window.location.host || "localhost";
+    // Các thông số chuẩn SIWE
+    const domain = window.location.hostname || "localhost";
     const origin = window.location.origin || "http://localhost:5173";
-    const statement = "Authorize GhostKey access to Lit Protocol.";
+    const statement = "This is a signed message to authorize GhostKey to perform encryption/decryption operations.";
+    const version = "1";
+    const chainId = "1"; // Lit mặc định dùng Ethereum chain ID cho auth
     const nonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const issuedAt = new Date().toISOString();
+    const expirationTime = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(); // 24h
 
-    const message = `${domain} wants you to sign in with your Ethereum account:
-${wallet.address}
+    // Cấu trúc message BẮT BUỘC phải đúng format này
+    const siweMessage = `${domain} wants you to sign in with your Ethereum account:
+${address}
 
 ${statement}
 
 URI: ${origin}
-Version: 1
-Chain ID: 1
+Version: ${version}
+Chain ID: ${chainId}
 Nonce: ${nonce}
 Issued At: ${issuedAt}
-Expiration Time: ${expiration}`;
+Expiration Time: ${expirationTime}`;
 
-    const signature = await wallet.signMessage(message);
+    const signature = await wallet.signMessage(siweMessage);
 
-    const sessionData: SessionData = {
-      signature,
-      address: wallet.address,
-      expiry: Date.parse(expiration),
-      signedMessage: message, // Store exact message string
+    return {
+      sig: signature,
+      derivedVia: "web3.eth.personal.sign",
+      signedMessage: siweMessage,
+      address: address,
     };
-
-    this.storeSession(sessionData);
-    console.log("✅ Generated new Lit session (SIWE compliant)");
-    return sessionData;
   }
 
-  async ensureSession(): Promise<SessionData> {
-    if (this.hasValidSession()) {
-      return this.getStoredSession()!;
-    }
-    return this.generateSession();
-  }
+  /**
+   * MÃ HÓA
+   */
+  async encryptFile(file: File, listingId: string, packageId: string, userAddress: string) {
+    await this.connect();
+    const authSig = await this.getAuthSig();
 
-  private getAccessControlConditions() {
-    return [
+    const accessControlConditions = [
       {
-        conditionType: "evmBasic",
         contractAddress: "",
         standardContractType: "",
         chain: "ethereum",
         method: "",
-        parameters: [":userAddress"],
+        parameters: [userAddress, listingId, packageId],
         returnValueTest: {
           comparator: "=",
-          value: ":userAddress",
+          value: "true",
         },
       },
     ];
-  }
 
-  async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
-    await this.connect();
-    const session = await this.ensureSession();
-
-    // FIX: Use stored session message
-    const authSig = {
-      sig: session.signature,
-      derivedVia: "web3.eth.personal.sign",
-      signedMessage: session.signedMessage, // Must match signature exactly
-      address: session.address,
-    };
-
-    const accessControlConditions = this.getAccessControlConditions();
+    // Encrypt file content directly
     const fileContent = await file.text();
-
-    console.log("🔐 Encrypting file...");
-
     const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
       {
         accessControlConditions,
-        dataToEncrypt: fileContent,
-        authSig, // Pass authSig explicitly in v6
+        authSig,
         chain: "ethereum",
+        dataToEncrypt: fileContent,
       },
-      this.litNodeClient!,
+      this.client,
     );
 
-    return { ciphertext, dataToEncryptHash };
+    // Trả về JSON string để lưu vào Smart Contract
+    return JSON.stringify({
+      ciphertext,
+      dataToEncryptHash,
+    });
   }
 
+  /**
+   * GIẢI MÃ
+   */
   async decryptFile(
-    ciphertext: string,
-    dataToEncryptHash: string,
+    ciphertextFromWalrus: string,
+    litDataHashFromSui: string,
     listingId: string,
     packageId: string,
     userAddress: string,
-  ): Promise<string> {
+  ) {
     await this.connect();
-    const session = await this.ensureSession(); // Ensure valid session
+    const authSig = await this.getAuthSig();
 
-    // FIX: Use stored session message
-    const authSig = {
-      sig: session.signature,
-      derivedVia: "web3.eth.personal.sign",
-      signedMessage: session.signedMessage,
-      address: session.address,
-    };
+    // Logic xử lý dữ liệu đầu vào:
+    // 1. ciphertextFromWalrus: Là chuỗi base64 ciphertext lấy từ Walrus
+    // 2. litDataHashFromSui: Là hash lấy từ Smart Contract (lit_data_hash)
 
-    // Inject Lit Action
-    const litActionCode = LIT_ACTION_VERIFY_ACCESS;
-    const jsParams = {
-      userAddress,
-      listingId,
-      packageId,
-    };
+    // Lưu ý: Ở hàm encryptFile trên, ta đã trả về JSON chứa cả 2.
+    // Nhưng trong flow thực tế (no-backend), ta lưu:
+    // - Ciphertext -> Walrus
+    // - Hash -> Sui (lit_data_hash)
 
-    console.log("🔓 Decrypting with Lit Protocol...");
+    // Tuy nhiên, để tương thích ngược với code frontend cũ,
+    // ta cần kiểm tra xem litDataHashFromSui có phải là JSON cũ không.
+    let finalHash = litDataHashFromSui;
+
+    try {
+      const parsed = JSON.parse(litDataHashFromSui);
+      if (parsed.dataToEncryptHash) {
+        finalHash = parsed.dataToEncryptHash;
+      }
+    } catch (e) {
+      // Nếu không parse được JSON thì nó chính là hash raw, dùng luôn
+    }
+
+    console.log("🔓 Decrypting...", {
+      ciphertextLen: ciphertextFromWalrus.length,
+      hash: finalHash,
+      user: userAddress,
+    });
 
     try {
       const decryptedString = await LitJsSdk.decryptToString(
         {
-          accessControlConditions: this.getAccessControlConditions(),
-          chain: "ethereum",
-          ciphertext,
-          dataToEncryptHash,
           authSig,
-          litActionCode, // Pass action code
-          jsParams, // Pass params
+          ciphertext: ciphertextFromWalrus,
+          dataToEncryptHash: finalHash,
+          chain: "ethereum",
+          litActionCode: LIT_ACTION_CODE,
+          jsParams: {
+            userAddress,
+            listingId,
+            packageId,
+          },
         },
-        this.litNodeClient!,
+        this.client,
       );
 
-      console.log("✅ Decryption successful");
       return decryptedString;
-    } catch (error: any) {
-      console.error("❌ Lit decryption failed:", error);
-      // Clean error message
-      if (error.message?.includes("NodeInvalidAuthSig")) {
-        // Clear session to force regenerate next time
-        this.clearSession();
-        throw new Error("Session expired or invalid. Please refresh the page.");
+    } catch (e: any) {
+      console.error("Lit Decrypt Detailed Error:", e);
+      if (e.message?.includes("NodeInvalidAuthSig")) {
+        // Xóa key cũ nếu lỗi auth để tạo lại
+        localStorage.removeItem(BURNER_WALLET_KEY);
       }
-      throw error;
+      throw new Error(e.message || "Decryption failed");
     }
   }
 }
 
-export const litService = new LitProtocolService();
+export const litService = new LitService();
