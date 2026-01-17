@@ -7,13 +7,14 @@ import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/
 import { getFullnodeUrl } from '@mysten/sui/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { SUI_CONFIG } from '@/config/sui';
 
 // Import dapp-kit styles for modal rendering
 import '@mysten/dapp-kit/dist/index.css';
 
 // Configure networks
 const { networkConfig } = createNetworkConfig({
-  testnet: { url: getFullnodeUrl('testnet') },
+  testnet: { url: SUI_CONFIG.rpcUrl ?? getFullnodeUrl('testnet') },
   mainnet: { url: getFullnodeUrl('mainnet') },
 });
 
