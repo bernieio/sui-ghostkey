@@ -8,6 +8,9 @@ import { getFullnodeUrl } from '@mysten/sui/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
+// Import dapp-kit styles for modal rendering
+import '@mysten/dapp-kit/dist/index.css';
+
 // Configure networks
 const { networkConfig } = createNetworkConfig({
   testnet: { url: getFullnodeUrl('testnet') },
