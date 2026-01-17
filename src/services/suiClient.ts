@@ -232,6 +232,8 @@ export function buildCreateListingTx(
   
   const basePriceMist = suiToMist(basePriceSui);
   
+  // Contract signature: create_listing(blob_id, lit_data_hash, base_price, slope, mime_type)
+  // Note: ctx is handled automatically by Sui, Clock is NOT needed for create_listing
   tx.moveCall({
     target: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::create_listing`,
     arguments: [
@@ -240,7 +242,6 @@ export function buildCreateListingTx(
       tx.pure.u64(basePriceMist),
       tx.pure.u64(BigInt(slopeMist)),
       tx.pure.string(mimeType),
-      tx.object(SUI_CONFIG.clockObjectId),
     ],
   });
 
