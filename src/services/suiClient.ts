@@ -262,12 +262,12 @@ export function buildCreateListingTx(
 
 /**
  * Build transaction to rent access to a listing
+ * Contract signature: rent_access(listing, payment, hours, clock, ctx)
  */
 export function buildRentAccessTx(
   listingId: string,
   hours: number,
-  paymentAmountMist: bigint,
-  maxPricePerHourMist: bigint
+  paymentAmountMist: bigint
 ): Transaction {
   const tx = new Transaction();
   
@@ -277,11 +277,10 @@ export function buildRentAccessTx(
   tx.moveCall({
     target: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::rent_access`,
     arguments: [
-      tx.object(listingId),
-      tx.pure.u64(BigInt(hours)),
-      paymentCoin,
-      tx.pure.u64(maxPricePerHourMist),
-      tx.object(SUI_CONFIG.clockObjectId),
+      tx.object(listingId),       // listing: &mut Listing
+      paymentCoin,                // payment: Coin<SUI>
+      tx.pure.u64(BigInt(hours)), // hours: u64
+      tx.object(SUI_CONFIG.clockObjectId), // clock: &Clock
     ],
   });
 

@@ -67,8 +67,7 @@ const ListingDetail = () => {
       const tx = buildRentAccessTx(
         listing.objectId,
         rentalHours,
-        rentalCost,
-        slippageBuffer
+        rentalCost + slippageBuffer // Include slippage in payment amount
       );
 
       await signAndExecute({ transaction: tx });
