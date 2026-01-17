@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { atomDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { fetchFromWalrus } from "@/services/walrus"; // Import service mới
 
 const ContentViewer = () => {
   const { id: listingId } = useParams();
@@ -68,23 +69,15 @@ const ContentViewer = () => {
 
     setDecrypting(true);
     try {
-      const blobId = listing.walrusBlobId;
-      console.log("📥 Fetching from Walrus:", blobId);
+      // 1. Fetch HEX từ Walrus (Dùng service có Failover)
+      // Không cần fetch URL thủ công nữa
+      const ciphertextHex = await fetchFromWalrus(listing.walrusBlobId);
 
-      const aggregatorUrl = `https://aggregator.walrus-testnet.walrus.space/v1/blobs/${blobId}`;
-      const response = await fetch(aggregatorUrl);
+      console.log("✅ Ciphertext fetched, hex len:", ciphertextHex.length);
 
-      if (!response.ok) throw new Error(`Walrus fetch failed: ${response.statusText}`);
-
-      // FIX: Lấy dữ liệu dưới dạng ArrayBuffer (Raw Bytes)
-      // Không dùng .text() vì nó làm hỏng dữ liệu binary
-      const arrayBuffer = await response.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-
-      console.log("✅ Ciphertext bytes fetched, size:", bytes.length);
-
+      // 2. Decrypt (Đầu vào là Hex -> Lit xử lý ngon ơ)
       const content = await litService.decryptFile(
-        bytes, // Truyền Raw Bytes vào service
+        ciphertextHex,
         listing.litDataHash,
         listingId,
         SUI_CONFIG.packageId,

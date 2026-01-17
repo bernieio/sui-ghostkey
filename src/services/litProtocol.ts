@@ -14,60 +14,33 @@ export interface SessionData {
 }
 
 export interface EncryptionResult {
-  ciphertext: string;
+  ciphertext: string; // HEX String
   dataToEncryptHash: string;
 }
 
-// --- UNIVERSAL DATA ADAPTER ---
+// --- HELPERS ---
 
 /**
- * Chuyển đổi mọi loại dữ liệu đầu vào (Raw Bytes, Base64 String, Hex String)
- * thành định dạng HEX String chuẩn mà Lit SDK V6 yêu cầu.
+ * Chuyển Base64 sang Hex an toàn
  */
-function adaptCiphertextToHex(data: Uint8Array): string {
+function base64ToHex(base64: string): string {
   try {
-    // 1. Thử convert bytes sang string để kiểm tra format
-    const textDecoder = new TextDecoder();
-    const str = textDecoder.decode(data).trim();
-
-    // Case A: Dữ liệu là HEX String (VD: "7b226d...")
-    // Chỉ chứa 0-9, a-f và độ dài chẵn
-    if (/^[0-9a-fA-F]+$/.test(str) && str.length % 2 === 0) {
-      console.log("Detected format: HEX String");
-      return str;
+    const raw = atob(base64);
+    let result = "";
+    for (let i = 0; i < raw.length; i++) {
+      const hex = raw.charCodeAt(i).toString(16).padStart(2, "0");
+      result += hex;
     }
-
-    // Case B: Dữ liệu là Base64 String (VD: "eyJt...")
-    // Chứa ký tự Base64 và có thể có padding "="
-    // Kiểm tra sơ bộ bằng Regex Base64
-    if (/^[A-Za-z0-9+/=]+$/.test(str)) {
-      try {
-        const raw = atob(str);
-        console.log("Detected format: Base64 String");
-        // Convert raw binary string to Hex
-        let hex = "";
-        for (let i = 0; i < raw.length; i++) {
-          hex += raw.charCodeAt(i).toString(16).padStart(2, "0");
-        }
-        return hex;
-      } catch (e) {
-        // Nếu atob lỗi, nghĩa là không phải Base64 hợp lệ -> Fallthrough xuống Case C
-      }
-    }
-
-    // Case C: Dữ liệu là Raw Binary (Ciphertext gốc)
-    // Convert trực tiếp từng byte sang Hex
-    console.log("Detected format: Raw Binary");
-    return Array.from(data)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    return result;
   } catch (e) {
-    console.error("Ciphertext adaptation failed:", e);
-    throw new Error("Failed to process ciphertext format");
+    console.error("Base64 to Hex failed:", e);
+    return base64;
   }
 }
 
-// --- HELPER: FILE TO DATA URL ---
+/**
+ * Convert File to Data URL
+ */
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -77,7 +50,7 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-// --- LIT ACTION ---
+// LIT ACTION CODE (Giữ nguyên logic verify)
 const LIT_ACTION_VERIFY_ACCESS = `
 (async () => {
   const checkSuiAccess = async () => {
@@ -104,7 +77,9 @@ const LIT_ACTION_VERIFY_ACCESS = `
         body
       });
       const res = await resp.json();
-      const objects = res.result?.data || [];
+      if (!res.result || !res.result.data) return false;
+
+      const objects = res.result.data;
       const now = Date.now();
 
       const validPass = objects.find(obj => {
@@ -130,12 +105,10 @@ class LitProtocolService {
 
   async connect(): Promise<LitNodeClient> {
     if (this.litNodeClient?.ready) return this.litNodeClient;
-
     if (this.isConnecting) {
       while (this.isConnecting) await new Promise((r) => setTimeout(r, 100));
       if (this.litNodeClient?.ready) return this.litNodeClient;
     }
-
     this.isConnecting = true;
     try {
       this.litNodeClient = new LitNodeClient({
@@ -143,11 +116,7 @@ class LitProtocolService {
         debug: false,
       });
       await this.litNodeClient.connect();
-      console.log("✅ Lit Protocol Connected");
       return this.litNodeClient;
-    } catch (error) {
-      console.error("❌ Failed to connect to Lit:", error);
-      throw error;
     } finally {
       this.isConnecting = false;
     }
@@ -161,50 +130,33 @@ class LitProtocolService {
         chain: "ethereum",
         method: "",
         parameters: [":userAddress"],
-        returnValueTest: {
-          comparator: "=",
-          value: ":userAddress",
-        },
+        returnValueTest: { comparator: "=", value: ":userAddress" },
       },
     ];
   }
 
+  // --- SESSION MANAGE (Giữ nguyên logic SIWE chuẩn) ---
   private getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) return this.burnerWallet;
     const storedKey = localStorage.getItem(BURNER_WALLET_KEY);
-    if (storedKey) {
-      this.burnerWallet = new ethers.Wallet(storedKey);
-      return this.burnerWallet;
-    }
+    if (storedKey) return (this.burnerWallet = new ethers.Wallet(storedKey));
     this.burnerWallet = ethers.Wallet.createRandom();
     localStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
     return this.burnerWallet;
   }
 
-  private hasValidSession(): boolean {
-    const sessionData = this.getStoredSession();
-    if (!sessionData) return false;
-    return Date.now() < sessionData.expiry;
-  }
-
   private getStoredSession(): SessionData | null {
     try {
       const stored = localStorage.getItem(SESSION_KEY);
-      if (!stored) return null;
-      return JSON.parse(stored);
+      return stored && Date.now() < JSON.parse(stored).expiry ? JSON.parse(stored) : null;
     } catch {
       return null;
     }
   }
 
-  private storeSession(data: SessionData): void {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(data));
-  }
-
   private async createSessionInternal(): Promise<SessionData> {
     const wallet = this.getBurnerWallet();
     const address = await wallet.getAddress();
-
     const expiryDays = 7;
     const expiration = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
     const issuedAt = new Date().toISOString();
@@ -213,52 +165,30 @@ class LitProtocolService {
     const origin = window.location.origin || "http://localhost:5173";
     const nonce = Math.random().toString(36).substring(2) + Date.now().toString(36);
 
-    const siweMessage = `${domain} wants you to sign in with your Ethereum account:
-${address}
-
-Authorize GhostKey access to Lit Protocol.
-
-URI: ${origin}
-Version: 1
-Chain ID: 1
-Nonce: ${nonce}
-Issued At: ${issuedAt}
-Expiration Time: ${expiration}`;
+    const siweMessage = `${domain} wants you to sign in with your Ethereum account:\n${address}\n\nAuthorize GhostKey access to Lit Protocol.\n\nURI: ${origin}\nVersion: 1\nChain ID: 1\nNonce: ${nonce}\nIssued At: ${issuedAt}\nExpiration Time: ${expiration}`;
 
     const signature = await wallet.signMessage(siweMessage);
-
-    const sessionData: SessionData = {
-      signature,
-      address,
-      expiry: Date.parse(expiration),
-      signedMessage: siweMessage,
-    };
-
-    this.storeSession(sessionData);
+    const sessionData = { signature, address, expiry: Date.parse(expiration), signedMessage: siweMessage };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionData));
     return sessionData;
   }
 
-  getSessionExpiry(): number | null {
-    const session = this.getStoredSession();
-    return session ? session.expiry : null;
-  }
-
-  async generateSession(): Promise<SessionData> {
-    return this.createSessionInternal();
-  }
-
   async ensureSession(): Promise<SessionData> {
-    if (this.hasValidSession()) {
-      return this.getStoredSession()!;
-    }
-    return this.createSessionInternal();
+    const session = this.getStoredSession();
+    return session ? session : this.createSessionInternal();
   }
 
-  async verifyAccess(): Promise<boolean> {
+  getSessionExpiry(): number | null {
+    return this.getStoredSession()?.expiry || null;
+  }
+  async generateSession() {
+    return this.createSessionInternal();
+  }
+  async verifyAccess() {
     return true;
   }
 
-  // --- ENCRYPT ---
+  // --- ENCRYPT (UPDATED: RETURN HEX) ---
   async encryptFile(file: File, listingId: string, packageId: string, userAddress: string): Promise<EncryptionResult> {
     await this.connect();
     const session = await this.ensureSession();
@@ -270,33 +200,27 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    const accessControlConditions = this.getUnifiedAccessControlConditions();
-
-    // Convert file to Data URL to preserve binary content
     const fileContentBase64 = await fileToDataUrl(file);
 
-    const params: any = {
-      accessControlConditions,
-      dataToEncrypt: fileContentBase64,
-      authSig,
-      chain: "ethereum",
-    };
+    const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(
+      {
+        accessControlConditions: this.getUnifiedAccessControlConditions(),
+        dataToEncrypt: fileContentBase64,
+        authSig,
+        chain: "ethereum",
+      },
+      this.litNodeClient!,
+    );
 
-    const { ciphertext, dataToEncryptHash } = await LitJsSdk.encryptString(params, this.litNodeClient!);
+    // FIX: Convert Base64 to Hex immediately for safe storage
+    const ciphertextHex = base64ToHex(ciphertext);
 
-    // IMPORTANT: Always normalize to HEX before returning
-    // encryptString returns Base64, but we want to store HEX for robustness
-    const ciphertextHex = adaptCiphertextToHex(new TextEncoder().encode(ciphertext));
-
-    return {
-      ciphertext: ciphertextHex,
-      dataToEncryptHash,
-    };
+    return { ciphertext: ciphertextHex, dataToEncryptHash };
   }
 
-  // --- DECRYPT ---
+  // --- DECRYPT (UPDATED: EXPECT HEX) ---
   async decryptFile(
-    ciphertextBytes: Uint8Array, // Nhận Raw Bytes từ Walrus
+    ciphertextHex: string, // Expect Hex String
     dataToEncryptHash: string,
     listingId: string,
     packageId: string,
@@ -312,36 +236,26 @@ Expiration Time: ${expiration}`;
       address: session.address,
     };
 
-    // 1. Chuẩn hóa dữ liệu đầu vào thành HEX String
-    const ciphertextHex = adaptCiphertextToHex(ciphertextBytes);
-
-    const accessControlConditions = this.getUnifiedAccessControlConditions();
-
-    const params: any = {
-      accessControlConditions,
-      chain: "ethereum",
-      ciphertext: ciphertextHex,
-      dataToEncryptHash,
-      authSig,
-      litActionCode: LIT_ACTION_VERIFY_ACCESS,
-      jsParams: {
-        userAddress,
-        listingId,
-        packageId,
-      },
-    };
-
-    console.log("🔓 Decrypting Hex (len):", ciphertextHex.length);
+    console.log("🔓 Decrypting Hex Length:", ciphertextHex.length);
 
     try {
-      const decryptedDataUrl = await LitJsSdk.decryptToString(params, this.litNodeClient!);
+      const decryptedDataUrl = await LitJsSdk.decryptToString(
+        {
+          accessControlConditions: this.getUnifiedAccessControlConditions(),
+          chain: "ethereum",
+          ciphertext: ciphertextHex, // Pass Hex
+          dataToEncryptHash,
+          authSig,
+          litActionCode: LIT_ACTION_VERIFY_ACCESS,
+          jsParams: { userAddress, listingId, packageId },
+        },
+        this.litNodeClient!,
+      );
       return decryptedDataUrl;
     } catch (error: any) {
-      console.error("Lit Decrypt Failed:", error);
       if (error.message?.includes("NodeInvalidAuthSig") || error.errorCode === "NodeInvalidMultipleAuthSigs") {
         localStorage.removeItem(SESSION_KEY);
-        // Retry recursively
-        return this.decryptFile(ciphertextBytes, dataToEncryptHash, listingId, packageId, userAddress);
+        return this.decryptFile(ciphertextHex, dataToEncryptHash, listingId, packageId, userAddress);
       }
       throw error;
     }
