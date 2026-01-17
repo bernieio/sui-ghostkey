@@ -1,11 +1,12 @@
 /**
  * Lit Protocol Service for GhostKey
- * Full DatilTest Integration with SessionSigs and Encryption
+ * Full DatilTest Integration with SessionSigs, Capacity Delegation, and Encryption
  */
 
 import { LitNodeClient } from '@lit-protocol/lit-node-client';
 import * as LitJsSdk from '@lit-protocol/lit-node-client';
-import { LIT_CONFIG, LIT_ACTION_CODE, ENCRYPTED_KEY_STORAGE_PREFIX } from '@/config/lit';
+import { LitAbility, LitActionResource, createSiweMessage, generateAuthSig } from '@lit-protocol/auth-helpers';
+import { LIT_CONFIG, LIT_CAPACITY_CONFIG, LIT_ACTION_CODE, ENCRYPTED_KEY_STORAGE_PREFIX } from '@/config/lit';
 import { SUI_CONFIG } from '@/config/sui';
 import { ethers } from 'ethers';
 
@@ -84,10 +85,17 @@ class LitProtocolService {
 
   /**
    * Get or create a burner wallet for Lit Protocol authentication
-   * This simplifies auth without requiring Sui wallet signatures
+   * Uses environment variable if available, otherwise creates random wallet
    */
   getBurnerWallet(): ethers.Wallet {
     if (this.burnerWallet) {
+      return this.burnerWallet;
+    }
+
+    // Check for environment variable private key first (for full Lit Action execution)
+    if (LIT_CONFIG.burnerPrivateKey) {
+      console.log('Using configured burner wallet with tstLPX tokens');
+      this.burnerWallet = new ethers.Wallet(LIT_CONFIG.burnerPrivateKey);
       return this.burnerWallet;
     }
 
@@ -98,11 +106,18 @@ class LitProtocolService {
       return this.burnerWallet;
     }
 
-    // Create new burner wallet
+    // Create new burner wallet (fallback - won't have tstLPX tokens)
     this.burnerWallet = ethers.Wallet.createRandom();
     sessionStorage.setItem(BURNER_WALLET_KEY, this.burnerWallet.privateKey);
-    console.log('Created new burner wallet for Lit auth');
+    console.log('Created new burner wallet for Lit auth (fallback mode)');
     return this.burnerWallet;
+  }
+
+  /**
+   * Check if we have a funded burner wallet (from env variable)
+   */
+  hasFundedBurnerWallet(): boolean {
+    return !!LIT_CONFIG.burnerPrivateKey;
   }
 
   /**
@@ -373,17 +388,83 @@ class LitProtocolService {
   /**
    * Verify access using Lit Action
    * Executes JavaScript on Lit nodes to check Sui AccessPass
-   * Falls back to direct RPC verification if Lit Action fails
+   * Uses capacity delegation for execution if funded wallet is available
    */
   async verifyAccessWithLitAction(
     userAddress: string,
     listingId: string
   ): Promise<{ access: boolean; reason?: string; expiryMs?: number }> {
-    // For hackathon demo: use direct RPC verification
-    // Full Lit Action execution requires proper sessionSigs setup with capacity delegation
-    // which requires tstLPX tokens on DatilTest network
-    console.log('Verifying access via direct RPC (Lit Action fallback)');
-    return this.verifyAccessDirect(userAddress, listingId);
+    await this.connect();
+
+    // Check if we have a funded burner wallet for full Lit Action execution
+    if (!this.hasFundedBurnerWallet()) {
+      console.log('No funded burner wallet, using direct RPC verification (fallback)');
+      return this.verifyAccessDirect(userAddress, listingId);
+    }
+
+    try {
+      const wallet = this.getBurnerWallet();
+      console.log('Executing Lit Action with funded wallet:', wallet.address);
+
+      // Define resource ability requests
+      const resourceAbilityRequests = [
+        {
+          resource: new LitActionResource('*'),
+          ability: LitAbility.LitActionExecution,
+        },
+      ];
+
+      // Get session signatures for Lit Action execution
+      const sessionSigs = await this.litNodeClient!.getSessionSigs({
+        chain: 'ethereum',
+        expiration: new Date(Date.now() + 1000 * 60 * 60).toISOString(), // 1 hour
+        resourceAbilityRequests,
+        authNeededCallback: async (params: { uri?: string; expiration?: string }) => {
+          const toSign = await createSiweMessage({
+            uri: params.uri || '',
+            expiration: params.expiration || new Date(Date.now() + 1000 * 60 * 60).toISOString(),
+            resources: resourceAbilityRequests,
+            walletAddress: wallet.address,
+            nonce: await this.litNodeClient!.getLatestBlockhash(),
+            litNodeClient: this.litNodeClient!,
+          });
+          return await generateAuthSig({
+            signer: wallet,
+            toSign,
+          });
+        },
+      });
+
+      console.log('Session signatures obtained, executing Lit Action...');
+
+      // Execute Lit Action to verify AccessPass ownership on Sui
+      const response = await this.litNodeClient!.executeJs({
+        code: LIT_ACTION_CODE,
+        sessionSigs,
+        jsParams: {
+          userAddress,
+          listingId,
+          packageId: SUI_CONFIG.packageId,
+        },
+      });
+
+      console.log('Lit Action response:', response);
+
+      // Parse the response
+      if (response.response) {
+        const result = JSON.parse(response.response as string);
+        console.log('✅ Lit Action verification result:', result);
+        return result;
+      }
+
+      // If no response, fallback to direct verification
+      console.warn('No response from Lit Action, falling back to direct RPC');
+      return this.verifyAccessDirect(userAddress, listingId);
+    } catch (error) {
+      console.error('Lit Action execution failed:', error);
+      console.log('Falling back to direct RPC verification');
+      return this.verifyAccessDirect(userAddress, listingId);
+    }
   }
 
   /**
