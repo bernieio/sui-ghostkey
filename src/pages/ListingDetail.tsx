@@ -7,7 +7,7 @@ import { Listing } from "@/types/marketplace";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Loader2, Tag, ShieldCheck, ArrowLeft, Coins } from "lucide-react";
+import { Loader2, Tag, ShieldCheck, ArrowLeft, Coins, Clock } from "lucide-react";
 
 const ListingDetail = () => {
   const { id } = useParams();
@@ -20,7 +20,7 @@ const ListingDetail = () => {
   const [loading, setLoading] = useState(true);
   const [renting, setRenting] = useState(false);
 
-  // 1. FETCH DATA & MAP FIELDS (Quan trọng nhất)
+  // 1. FETCH DATA & MAP FIELDS
   useEffect(() => {
     const fetchListing = async () => {
       if (!id) return;
@@ -34,19 +34,22 @@ const ListingDetail = () => {
           const fields = obj.data.content.fields as any;
 
           // MAPPING: Từ Sui (snake_case) -> Frontend (camelCase)
-          // Đây là bước sửa lỗi TS2353 và TS2551
+          // FIX TS2739: Bổ sung 2 trường thiếu (lastDecayTimestamp, decayedThisPeriod)
           const mappedListing: Listing = {
             id: obj.data.objectId,
             seller: fields.seller,
-            // Map các trường số và chuỗi quan trọng
-            basePrice: fields.base_price, // base_price -> basePrice
-            priceSlope: fields.price_slope, // price_slope -> priceSlope
-            activeRentals: fields.active_rentals, // active_rentals -> activeRentals
-            walrusBlobId: fields.walrus_blob_id, // walrus_blob_id -> walrusBlobId
-            litDataHash: fields.lit_data_hash, // lit_data_hash -> litDataHash
+            basePrice: fields.base_price,
+            priceSlope: fields.price_slope,
+            activeRentals: fields.active_rentals,
+            walrusBlobId: fields.walrus_blob_id,
+            litDataHash: fields.lit_data_hash,
             mimeType: fields.mime_type || "text/plain",
             balance: fields.balance,
-            isActive: fields.is_active, // is_active -> isActive
+            isActive: fields.is_active,
+
+            // --- CÁC TRƯỜNG MỚI ĐƯỢC BỔ SUNG ---
+            lastDecayTimestamp: fields.last_decay_timestamp || "0",
+            decayedThisPeriod: fields.decayed_this_period || "0",
           };
 
           setListing(mappedListing);
@@ -75,27 +78,19 @@ const ListingDetail = () => {
     try {
       const txb = new Transaction();
 
-      // Sử dụng đúng tên biến camelCase đã map ở trên
       const basePriceBig = BigInt(listing.basePrice);
       const slopeBig = BigInt(listing.priceSlope);
       const rentalsBig = BigInt(listing.activeRentals);
 
       // Tính giá: Base + (Slope * Rentals)
       const currentPrice = basePriceBig + slopeBig * rentalsBig;
-      const hours = 1; // Mặc định thuê 1 giờ (Hackathon MVP)
+      const hours = 1; // Default 1 hour
 
-      // Tách Coin để trả tiền
       const [coin] = txb.splitCoins(txb.gas, [txb.pure.u64(currentPrice * BigInt(hours))]);
 
-      // Gọi Smart Contract
       txb.moveCall({
         target: `${SUI_CONFIG.packageId}::marketplace::rent_access`,
-        arguments: [
-          txb.object(listing.id), // Listing ID
-          coin, // Tiền
-          txb.pure.u64(hours), // Thời gian
-          txb.object("0x6"), // Clock Object (Sui System)
-        ],
+        arguments: [txb.object(listing.id), coin, txb.pure.u64(hours), txb.object(SUI_CONFIG.clockObjectId)],
       });
 
       signAndExecute(
@@ -105,7 +100,6 @@ const ListingDetail = () => {
             console.log("Rental success:", result);
             toast.success("Rent successful! Redirecting to viewer...");
 
-            // Đợi 2s để blockchain index rồi chuyển trang
             setTimeout(() => {
               navigate(`/view/${listing.id}`);
             }, 2000);
@@ -144,7 +138,6 @@ const ListingDetail = () => {
     );
   }
 
-  // Tính giá hiển thị (đổi từ MIST sang SUI)
   const displayPrice =
     (Number(listing.basePrice) + Number(listing.priceSlope) * Number(listing.activeRentals)) / 1_000_000_000;
 
@@ -195,6 +188,15 @@ const ListingDetail = () => {
                 Base: {Number(listing.basePrice) / 1_000_000_000} SUI + Slope:{" "}
                 {Number(listing.priceSlope) / 1_000_000_000} SUI/rental
               </p>
+            </div>
+          </div>
+
+          {/* Hiển thị thêm thông tin Decay nếu cần debug */}
+          <div className="flex items-center gap-3 p-4 bg-gray-900/50 rounded-lg border border-gray-800">
+            <Clock className="w-5 h-5 text-blue-400" />
+            <div>
+              <p className="text-sm text-gray-500">Rental Stats</p>
+              <p className="text-gray-200 text-sm">Active Rentals: {listing.activeRentals.toString()}</p>
             </div>
           </div>
         </div>
