@@ -4,15 +4,9 @@
  */
 
 export const SUI_CONFIG = {
+  // Network configuration
   network: 'testnet' as const,
   rpcUrl: 'https://fullnode.testnet.sui.io:443',
-  fallbackRpcUrls: [
-    'https://testnet.suiet.app',
-    'https://sui-testnet.nodeinfra.com',
-    'https://sui-testnet-rpc.publicnode.com',
-    'https://sui-rpc-testnet.testnet-pride.com',
-    'https://sui-testnet-kr-1.cosmostation.io',
-  ],
   
   // HTTP-only mode: Disable WebSocket subscriptions
   // Sui testnet public nodes have limited WebSocket support

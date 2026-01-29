@@ -1,106 +1,75 @@
-export const config = {
-  runtime: "edge",
-};
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const PUBLISHERS = [
-  "https://publisher.walrus-testnet.walrus.space",
-  "https://wal-publisher-testnet.staketab.org",
-  "https://walrus-testnet-publisher.bartestnet.com",
-  "https://walrus-testnet-publisher.nodeinfra.com",
-  "https://walrus-testnet.stakingdefenseleague.com",
-  "https://walrus.testnet.pops.one",
-  "https://sui-walrus-testnet.bwarelabs.com/publisher",
-  "https://walrus-publish-testnet.chainode.tech:9003",
-  "https://testnet-publisher.walrus.space",
-  "https://walrus-testnet-publisher.redundex.com",
-];
+// Walrus testnet publisher endpoint
+const WALRUS_PUBLISHER_URL = 'https://publisher.walrus-testnet.walrus.space';
 
-const TIMEOUT_MS = 45000;
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, PUT, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
-  return bytes;
-}
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  if (req.method !== 'POST' && req.method !== 'PUT') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+    const epochs = req.query.epochs || '5';
+    
+    // Get the raw body as buffer
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const body = Buffer.concat(chunks);
 
-export default async function handler(request: Request) {
-  if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
+    if (body.length === 0) {
+      return res.status(400).json({ error: 'Empty request body' });
+    }
+
+    console.log(`Proxying upload to Walrus, size: ${body.length} bytes, epochs: ${epochs}`);
+
+    // Forward to Walrus publisher - correct endpoint is /v1/blobs
+    const walrusUrl = `${WALRUS_PUBLISHER_URL}/v1/blobs?epochs=${epochs}`;
+    console.log(`Walrus URL: ${walrusUrl}`);
+    
+    const walrusResponse = await fetch(walrusUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+      },
+      body: body,
     });
-  }
 
-  try {
-    const hexString = await request.text();
-
-    if (!hexString || hexString.length === 0) {
-      return new Response(JSON.stringify({ error: "Empty body" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
+    if (!walrusResponse.ok) {
+      const errorText = await walrusResponse.text();
+      console.error('Walrus error:', errorText);
+      return res.status(walrusResponse.status).json({ 
+        error: 'Walrus upload failed', 
+        details: errorText 
       });
     }
 
-    const binaryData = hexToBytes(hexString);
-    const errors: Array<{ node: string; status?: number; error: string }> = [];
-
-    for (const publisherUrl of PUBLISHERS) {
-      try {
-        console.log(`Trying upload to: ${publisherUrl} (${binaryData.length} bytes)`);
-
-        const walrusResp = await fetchWithTimeout(
-          `${publisherUrl}/v1/store?epochs=5`,
-          {
-            method: "PUT",
-            body: binaryData,
-            headers: { "Content-Type": "application/octet-stream" },
-          },
-          TIMEOUT_MS,
-        );
-
-        if (walrusResp.ok) {
-          const result = await walrusResp.json();
-          console.log(`Upload successful to ${publisherUrl}`);
-          return new Response(JSON.stringify(result), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        const errorText = await walrusResp.text().catch(() => "Unable to read response");
-        errors.push({ node: publisherUrl, status: walrusResp.status, error: errorText.slice(0, 200) });
-        console.warn(`Node ${publisherUrl} returned ${walrusResp.status}: ${errorText.slice(0, 200)}`);
-      } catch (err: any) {
-        const errorMsg = err.name === "AbortError" ? "Request timeout" : err.message || String(err);
-        errors.push({ node: publisherUrl, error: errorMsg });
-        console.warn(`Node ${publisherUrl} failed:`, errorMsg);
-      }
-    }
-
-    return new Response(
-      JSON.stringify({
-        error: "Walrus upload failed on all nodes",
-        details: errors,
-      }),
-      { status: 503, headers: { "Content-Type": "application/json" } },
-    );
-  } catch (error: any) {
-    return new Response(
-      JSON.stringify({ error: "Internal Server Error", details: error.message }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
+    const data = await walrusResponse.json();
+    console.log('Walrus upload success:', JSON.stringify(data));
+    
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error('Proxy error:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error', 
+      message: error instanceof Error ? error.message : 'Unknown error' 
+    });
   }
 }
+
+export const config = {
+  api: {
+    bodyParser: false, // We handle raw body manually
+  },
+};

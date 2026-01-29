@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { useSignAndExecuteTransaction } from '@mysten/dapp-kit';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   MoreHorizontal,
   Wallet,
@@ -364,310 +365,354 @@ const ListingActions = ({ listing, onSuccess }: ListingActionsProps) => {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Dialog open={showWithdrawModal} onOpenChange={setShowWithdrawModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Wallet className="h-5 w-5 text-primary" />
-              Withdraw Balance
-            </DialogTitle>
-            <DialogDescription>
-              Withdraw your earnings from this listing.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Withdraw Modal */}
+      <AnimatePresence>
+        {showWithdrawModal && (
+          <Dialog open={showWithdrawModal} onOpenChange={setShowWithdrawModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Wallet className="h-5 w-5 text-primary" />
+                    Withdraw Balance
+                  </DialogTitle>
+                  <DialogDescription>
+                    Withdraw your earnings from this listing.
+                  </DialogDescription>
+                </DialogHeader>
 
-          <div className="py-4 space-y-4">
-            <div className="bg-muted/50 rounded-lg p-4">
-              <p className="text-sm text-muted-foreground">Available Balance</p>
-              <p className="text-2xl font-bold text-primary">
-                {balanceSui.toFixed(4)} SUI
-              </p>
-            </div>
+                <div className="py-4 space-y-4">
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <p className="text-sm text-muted-foreground">Available Balance</p>
+                    <p className="text-2xl font-bold text-primary">
+                      {balanceSui.toFixed(4)} SUI
+                    </p>
+                  </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="amount">Withdrawal Amount (SUI)</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="amount"
-                  type="number"
-                  step="0.001"
-                  min="0.001"
-                  max={balanceSui}
-                  value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(e.target.value)}
-                  placeholder="0.00"
-                />
-                <Button
-                  variant="outline"
-                  onClick={() => setWithdrawAmount(balanceSui.toString())}
-                >
-                  Max
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Minimum: 0.001 SUI
-              </p>
-            </div>
-          </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="amount">Withdrawal Amount (SUI)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="amount"
+                        type="number"
+                        step="0.001"
+                        min="0.001"
+                        max={balanceSui}
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                        placeholder="0.00"
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={() => setWithdrawAmount(balanceSui.toString())}
+                      >
+                        Max
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Minimum: 0.001 SUI
+                    </p>
+                  </div>
+                </div>
 
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowWithdrawModal(false)}
-              disabled={isProcessing}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleWithdraw}
-              disabled={!withdrawAmount || parseFloat(withdrawAmount) <= 0 || isProcessing}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Wallet className="h-4 w-4 mr-2" />
-                  Withdraw
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowWithdrawModal(false)}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleWithdraw}
+                    disabled={!withdrawAmount || parseFloat(withdrawAmount) <= 0 || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Wallet className="h-4 w-4 mr-2" />
+                        Withdraw
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
 
-      <Dialog open={showPricingModal} onOpenChange={setShowPricingModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-primary" />
-              Update Pricing
-            </DialogTitle>
-            <DialogDescription>
-              Adjust the base price and price slope for your listing.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Update Pricing Modal */}
+      <AnimatePresence>
+        {showPricingModal && (
+          <Dialog open={showPricingModal} onOpenChange={setShowPricingModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <DollarSign className="h-5 w-5 text-primary" />
+                    Update Pricing
+                  </DialogTitle>
+                  <DialogDescription>
+                    Adjust the base price and price slope for your listing.
+                  </DialogDescription>
+                </DialogHeader>
 
-          <div className="py-4 space-y-4">
-            <div className="bg-muted/50 rounded-lg p-4">
-              <p className="text-sm text-muted-foreground">Current Price</p>
-              <p className="text-2xl font-bold text-primary">
-                {formatSui(listing.currentPrice)} SUI/hour
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Active Rentals: {listing.activeRentals.toString()}
-              </p>
-            </div>
+                <div className="py-4 space-y-4">
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <p className="text-sm text-muted-foreground">Current Price</p>
+                    <p className="text-2xl font-bold text-primary">
+                      {formatSui(listing.currentPrice)} SUI/hour
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Active Rentals: {listing.activeRentals.toString()}
+                    </p>
+                  </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="basePrice">Base Price (SUI/hour)</Label>
-              <Input
-                id="basePrice"
-                type="number"
-                step="0.001"
-                min="0.000001"
-                value={newBasePrice}
-                onChange={(e) => setNewBasePrice(e.target.value)}
-                placeholder="0.01"
-              />
-            </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="basePrice">Base Price (SUI/hour)</Label>
+                    <Input
+                      id="basePrice"
+                      type="number"
+                      step="0.001"
+                      min="0.000001"
+                      value={newBasePrice}
+                      onChange={(e) => setNewBasePrice(e.target.value)}
+                      placeholder="0.01"
+                    />
+                  </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="slope">Price Slope (MIST per rental)</Label>
-              <Input
-                id="slope"
-                type="number"
-                min="0"
-                value={newSlope}
-                onChange={(e) => setNewSlope(e.target.value)}
-                placeholder="1000"
-              />
-              <p className="text-xs text-muted-foreground">
-                Must be less than base price. 1 SUI = 1,000,000,000 MIST
-              </p>
-            </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="slope">Price Slope (MIST per rental)</Label>
+                    <Input
+                      id="slope"
+                      type="number"
+                      min="0"
+                      value={newSlope}
+                      onChange={(e) => setNewSlope(e.target.value)}
+                      placeholder="1000"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Must be less than base price. 1 SUI = 1,000,000,000 MIST
+                    </p>
+                  </div>
 
-            <div className="bg-primary/5 border border-primary/20 rounded-lg p-3">
-              <p className="text-sm text-muted-foreground">
-                <strong>Preview:</strong> New price = {newBasePrice || '0'} SUI + ({listing.activeRentals.toString()} x {newSlope || '0'} MIST)
-              </p>
-            </div>
-          </div>
+                  <div className="bg-primary/5 border border-primary/20 rounded-lg p-3">
+                    <p className="text-sm text-muted-foreground">
+                      <strong>Preview:</strong> New price = {newBasePrice || '0'} SUI + ({listing.activeRentals.toString()} × {newSlope || '0'} MIST)
+                    </p>
+                  </div>
+                </div>
 
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowPricingModal(false)}
-              disabled={isProcessing}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleUpdatePricing}
-              disabled={!newBasePrice || !newSlope || isProcessing}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Updating...
-                </>
-              ) : (
-                <>
-                  <DollarSign className="h-4 w-4 mr-2" />
-                  Update Pricing
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowPricingModal(false)}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleUpdatePricing}
+                    disabled={!newBasePrice || !newSlope || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      <>
+                        <DollarSign className="h-4 w-4 mr-2" />
+                        Update Pricing
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
 
-      <Dialog open={showTransferModal} onOpenChange={setShowTransferModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              Transfer Ownership
-            </DialogTitle>
-            <DialogDescription>
-              This action cannot be undone. You will lose control of this listing.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Transfer Ownership Modal */}
+      <AnimatePresence>
+        {showTransferModal && (
+          <Dialog open={showTransferModal} onOpenChange={setShowTransferModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-destructive">
+                    <AlertTriangle className="h-5 w-5" />
+                    Transfer Ownership
+                  </DialogTitle>
+                  <DialogDescription>
+                    This action cannot be undone. You will lose control of this listing.
+                  </DialogDescription>
+                </DialogHeader>
 
-          <div className="py-4 space-y-4">
-            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
-              <p className="text-sm text-destructive font-medium">
-                Warning: Transferring ownership is permanent. The new owner will:
-              </p>
-              <ul className="text-sm text-muted-foreground mt-2 list-disc list-inside space-y-1">
-                <li>Have full control over the listing</li>
-                <li>Receive all future earnings</li>
-                <li>Be able to pause, update, or transfer the listing</li>
-              </ul>
-            </div>
+                <div className="py-4 space-y-4">
+                  <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
+                    <p className="text-sm text-destructive font-medium">
+                      ⚠️ Warning: Transferring ownership is permanent. The new owner will:
+                    </p>
+                    <ul className="text-sm text-muted-foreground mt-2 list-disc list-inside space-y-1">
+                      <li>Have full control over the listing</li>
+                      <li>Receive all future earnings</li>
+                      <li>Be able to pause, update, or transfer the listing</li>
+                    </ul>
+                  </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="newOwner">New Owner Address</Label>
-              <Input
-                id="newOwner"
-                value={transferAddress}
-                onChange={(e) => setTransferAddress(e.target.value)}
-                placeholder="0x..."
-                className="font-mono text-sm"
-              />
-              <p className="text-xs text-muted-foreground">
-                Enter the full Sui address of the new owner
-              </p>
-            </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="newOwner">New Owner Address</Label>
+                    <Input
+                      id="newOwner"
+                      value={transferAddress}
+                      onChange={(e) => setTransferAddress(e.target.value)}
+                      placeholder="0x..."
+                      className="font-mono text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Enter the full Sui address of the new owner
+                    </p>
+                  </div>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="confirmTransfer"
-                checked={confirmTransfer}
-                onChange={(e) => setConfirmTransfer(e.target.checked)}
-                className="rounded border-destructive"
-              />
-              <Label htmlFor="confirmTransfer" className="text-sm text-muted-foreground">
-                I understand this action is irreversible
-              </Label>
-            </div>
-          </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="confirmTransfer"
+                      checked={confirmTransfer}
+                      onChange={(e) => setConfirmTransfer(e.target.checked)}
+                      className="rounded border-destructive"
+                    />
+                    <Label htmlFor="confirmTransfer" className="text-sm text-muted-foreground">
+                      I understand this action is irreversible
+                    </Label>
+                  </div>
+                </div>
 
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowTransferModal(false);
-                setTransferAddress('');
-                setConfirmTransfer(false);
-              }}
-              disabled={isProcessing}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleTransfer}
-              disabled={!transferAddress || !confirmTransfer || isProcessing}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Transferring...
-                </>
-              ) : (
-                <>
-                  <Send className="h-4 w-4 mr-2" />
-                  Transfer Ownership
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowTransferModal(false);
+                      setTransferAddress('');
+                      setConfirmTransfer(false);
+                    }}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleTransfer}
+                    disabled={!transferAddress || !confirmTransfer || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Transferring...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4 mr-2" />
+                        Transfer Ownership
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
 
-      <Dialog open={showDecayModal} onOpenChange={setShowDecayModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Trash2 className="h-5 w-5 text-primary" />
-              Cleanup Expired Rentals
-            </DialogTitle>
-            <DialogDescription>
-              Remove expired rental records to reduce gas costs and optimize your listing.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Decay Modal */}
+      <AnimatePresence>
+        {showDecayModal && (
+          <Dialog open={showDecayModal} onOpenChange={setShowDecayModal}>
+            <DialogContent>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+              >
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Trash2 className="h-5 w-5 text-primary" />
+                    Cleanup Expired Rentals
+                  </DialogTitle>
+                  <DialogDescription>
+                    Remove expired rental records to reduce gas costs and optimize your listing.
+                  </DialogDescription>
+                </DialogHeader>
 
-          <div className="py-4 space-y-4">
-            <div className="bg-muted/50 rounded-lg p-4">
-              <p className="text-sm text-muted-foreground">Expired Rentals Found</p>
-              <p className="text-2xl font-bold text-primary">
-                {expiredPasses.length}
-              </p>
-            </div>
+                <div className="py-4 space-y-4">
+                  <div className="bg-muted/50 rounded-lg p-4">
+                    <p className="text-sm text-muted-foreground">Expired Rentals Found</p>
+                    <p className="text-2xl font-bold text-primary">
+                      {expiredPasses.length}
+                    </p>
+                  </div>
 
-            {expiredPasses.length > 0 ? (
-              <p className="text-sm text-muted-foreground">
-                This will remove expired rental records from the blockchain, reducing storage costs
-                and optimizing your listing performance.
-              </p>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No expired rentals found for this listing. All current rentals are still active.
-              </p>
-            )}
-          </div>
+                  {expiredPasses.length > 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      This will remove expired rental records from the blockchain, reducing storage costs
+                      and optimizing your listing performance.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No expired rentals found for this listing. All current rentals are still active.
+                    </p>
+                  )}
+                </div>
 
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowDecayModal(false)}
-              disabled={isProcessing}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleDecay}
-              disabled={expiredPasses.length === 0 || isProcessing}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Cleanup ({expiredPasses.length})
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowDecayModal(false)}
+                    disabled={isProcessing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleDecay}
+                    disabled={expiredPasses.length === 0 || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Cleanup ({expiredPasses.length})
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </motion.div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </AnimatePresence>
     </>
   );
 };

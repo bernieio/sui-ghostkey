@@ -8,59 +8,16 @@ import { Transaction } from '@mysten/sui/transactions';
 import { SUI_CONFIG, suiToMist } from '@/config/sui';
 import type { ListingWithMeta, AccessPass } from '@/types/marketplace';
 
+// Re-export types for backward compatibility
 export type { ListingWithMeta, AccessPass };
 
-const allRpcUrls = [SUI_CONFIG.rpcUrl, ...SUI_CONFIG.fallbackRpcUrls];
-let currentRpcIndex = 0;
+// Initialize Sui client - HTTP only mode
+// WebSocket subscriptions are disabled due to public node limitations
+// Data freshness is handled by React Query polling
+export const suiClient = new SuiClient({
+  url: SUI_CONFIG.rpcUrl,
+});
 
-function createClient(url: string): SuiClient {
-  return new SuiClient({ url });
-}
-
-let suiClient = createClient(allRpcUrls[currentRpcIndex]);
-
-export function switchToNextRpc(): boolean {
-  const nextIndex = (currentRpcIndex + 1) % allRpcUrls.length;
-  if (nextIndex === 0) {
-    return false;
-  }
-  currentRpcIndex = nextIndex;
-  suiClient = createClient(allRpcUrls[currentRpcIndex]);
-  console.log(`[Sui] Switched to RPC: ${allRpcUrls[currentRpcIndex]}`);
-  return true;
-}
-
-export async function withRetry<T>(
-  operation: (client: SuiClient) => Promise<T>,
-  maxRetries: number = 3
-): Promise<T> {
-  let lastError: Error | null = null;
-  const startIndex = currentRpcIndex;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await operation(suiClient);
-    } catch (error: any) {
-      lastError = error;
-      console.warn(`[Sui] RPC error (attempt ${attempt + 1}):`, error.message);
-
-      if (error.message?.includes('Failed to fetch') ||
-          error.message?.includes('timeout') ||
-          error.message?.includes('ECONNREFUSED')) {
-        const switched = switchToNextRpc();
-        if (!switched && currentRpcIndex === startIndex) {
-          break;
-        }
-      } else {
-        break;
-      }
-    }
-  }
-
-  throw lastError || new Error('All RPC endpoints failed');
-}
-
-export { suiClient };
 export default suiClient;
 
 // ============= Data Fetching =============
@@ -181,43 +138,43 @@ function parseAccessPass(objectId: string, fields: Record<string, unknown>): Acc
  */
 export async function fetchListings(): Promise<ListingWithMeta[]> {
   try {
-    return await withRetry(async (client) => {
-      const eventsResponse = await client.queryEvents({
-        query: {
-          MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::ListingCreated`,
-        },
-        limit: 50,
-        order: 'descending',
-      });
-
-      const listingIds = eventsResponse.data.map(event => {
-        const parsed = event.parsedJson as { listing_id: string };
-        return parsed.listing_id;
-      });
-
-      if (listingIds.length === 0) {
-        return [];
-      }
-
-      const objects = await client.multiGetObjects({
-        ids: listingIds,
-        options: {
-          showContent: true,
-          showOwner: true,
-        },
-      });
-
-      const listings: ListingWithMeta[] = [];
-
-      for (const obj of objects) {
-        if (obj.data?.content?.dataType === 'moveObject') {
-          const fields = obj.data.content.fields as Record<string, unknown>;
-          listings.push(parseListing(obj.data.objectId, fields));
-        }
-      }
-
-      return listings;
+    // Query for ListingCreated events to get all listing IDs
+    const eventsResponse = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::ListingCreated`,
+      },
+      limit: 50,
+      order: 'descending',
     });
+
+    const listingIds = eventsResponse.data.map(event => {
+      const parsed = event.parsedJson as { listing_id: string };
+      return parsed.listing_id;
+    });
+
+    if (listingIds.length === 0) {
+      return [];
+    }
+
+    // Fetch all listing objects
+    const objects = await suiClient.multiGetObjects({
+      ids: listingIds,
+      options: {
+        showContent: true,
+        showOwner: true,
+      },
+    });
+
+    const listings: ListingWithMeta[] = [];
+
+    for (const obj of objects) {
+      if (obj.data?.content?.dataType === 'moveObject') {
+        const fields = obj.data.content.fields as Record<string, unknown>;
+        listings.push(parseListing(obj.data.objectId, fields));
+      }
+    }
+
+    return listings;
   } catch (error) {
     console.error('Error fetching listings:', error);
     return [];
@@ -229,22 +186,20 @@ export async function fetchListings(): Promise<ListingWithMeta[]> {
  */
 export async function fetchListing(listingId: string): Promise<ListingWithMeta | null> {
   try {
-    return await withRetry(async (client) => {
-      const response = await client.getObject({
-        id: listingId,
-        options: {
-          showContent: true,
-          showOwner: true,
-        },
-      });
-
-      if (response.data?.content?.dataType === 'moveObject') {
-        const fields = response.data.content.fields as Record<string, unknown>;
-        return parseListing(response.data.objectId, fields);
-      }
-
-      return null;
+    const response = await suiClient.getObject({
+      id: listingId,
+      options: {
+        showContent: true,
+        showOwner: true,
+      },
     });
+
+    if (response.data?.content?.dataType === 'moveObject') {
+      const fields = response.data.content.fields as Record<string, unknown>;
+      return parseListing(response.data.objectId, fields);
+    }
+
+    return null;
   } catch (error) {
     console.error('Error fetching listing:', error);
     return null;
@@ -256,28 +211,26 @@ export async function fetchListing(listingId: string): Promise<ListingWithMeta |
  */
 export async function fetchUserAccessPasses(address: string): Promise<AccessPass[]> {
   try {
-    return await withRetry(async (client) => {
-      const response = await client.getOwnedObjects({
-        owner: address,
-        filter: {
-          StructType: SUI_CONFIG.types.accessPass,
-        },
-        options: {
-          showContent: true,
-        },
-      });
-
-      const passes: AccessPass[] = [];
-
-      for (const obj of response.data) {
-        if (obj.data?.content?.dataType === 'moveObject') {
-          const fields = obj.data.content.fields as Record<string, unknown>;
-          passes.push(parseAccessPass(obj.data.objectId, fields));
-        }
-      }
-
-      return passes;
+    const response = await suiClient.getOwnedObjects({
+      owner: address,
+      filter: {
+        StructType: SUI_CONFIG.types.accessPass,
+      },
+      options: {
+        showContent: true,
+      },
     });
+
+    const passes: AccessPass[] = [];
+
+    for (const obj of response.data) {
+      if (obj.data?.content?.dataType === 'moveObject') {
+        const fields = obj.data.content.fields as Record<string, unknown>;
+        passes.push(parseAccessPass(obj.data.objectId, fields));
+      }
+    }
+
+    return passes;
   } catch (error) {
     console.error('Error fetching access passes:', error);
     return [];
@@ -291,44 +244,45 @@ export async function fetchUserAccessPasses(address: string): Promise<AccessPass
  */
 export async function fetchSellerListings(sellerAddress: string): Promise<ListingWithMeta[]> {
   try {
-    return await withRetry(async (client) => {
-      const eventsResponse = await client.queryEvents({
-        query: {
-          MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::ListingCreated`,
-        },
-        limit: 100,
-        order: 'descending',
-      });
+    // Query for ListingCreated events to get all listing IDs
+    const eventsResponse = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::ListingCreated`,
+      },
+      limit: 100,
+      order: 'descending',
+    });
 
-      const listingIds = eventsResponse.data.map(event => {
-        const parsed = event.parsedJson as { listing_id: string };
-        return parsed.listing_id;
-      });
+    const listingIds = eventsResponse.data.map(event => {
+      const parsed = event.parsedJson as { listing_id: string };
+      return parsed.listing_id;
+    });
 
-      if (listingIds.length === 0) {
-        return [];
-      }
+    if (listingIds.length === 0) {
+      return [];
+    }
 
-      const objects = await client.multiGetObjects({
-        ids: listingIds,
-        options: {
-          showContent: true,
-        },
-      });
+    // Fetch all listing objects
+    const objects = await suiClient.multiGetObjects({
+      ids: listingIds,
+      options: {
+        showContent: true,
+      },
+    });
 
-      const listings: ListingWithMeta[] = [];
+    const listings: ListingWithMeta[] = [];
 
-      for (const obj of objects) {
-        if (obj.data?.content?.dataType === 'moveObject') {
-          const fields = obj.data.content.fields as Record<string, unknown>;
-          if (fields.seller === sellerAddress) {
-            listings.push(parseListing(obj.data.objectId, fields));
-          }
+    for (const obj of objects) {
+      if (obj.data?.content?.dataType === 'moveObject') {
+        const fields = obj.data.content.fields as Record<string, unknown>;
+        // Filter by seller address
+        if (fields.seller === sellerAddress) {
+          listings.push(parseListing(obj.data.objectId, fields));
         }
       }
+    }
 
-      return listings;
-    });
+    return listings;
   } catch (error) {
     console.error('Error fetching seller listings:', error);
     return [];
@@ -536,39 +490,37 @@ export async function fetchRentalEvents(listingId?: string): Promise<{
   timestamp: number;
 }[]> {
   try {
-    return await withRetry(async (client) => {
-      const response = await client.queryEvents({
-        query: {
-          MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::AccessRented`,
-        },
-        limit: 100,
-        order: 'descending',
+    const response = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${SUI_CONFIG.packageId}::${SUI_CONFIG.moduleName}::AccessRented`,
+      },
+      limit: 100,
+      order: 'descending',
+    });
+
+    const events = response.data
+      .filter(event => {
+        if (!listingId) return true;
+        const parsed = event.parsedJson as { listing_id: string };
+        return parsed.listing_id === listingId;
+      })
+      .map(event => {
+        const parsed = event.parsedJson as {
+          listing_id: string;
+          buyer: string;
+          price_paid: string;
+          hours: string;
+        };
+        return {
+          listingId: parsed.listing_id,
+          buyer: parsed.buyer,
+          pricePaid: BigInt(parsed.price_paid),
+          hours: BigInt(parsed.hours),
+          timestamp: Number(event.timestampMs),
+        };
       });
 
-      const events = response.data
-        .filter(event => {
-          if (!listingId) return true;
-          const parsed = event.parsedJson as { listing_id: string };
-          return parsed.listing_id === listingId;
-        })
-        .map(event => {
-          const parsed = event.parsedJson as {
-            listing_id: string;
-            buyer: string;
-            price_paid: string;
-            hours: string;
-          };
-          return {
-            listingId: parsed.listing_id,
-            buyer: parsed.buyer,
-            pricePaid: BigInt(parsed.price_paid),
-            hours: BigInt(parsed.hours),
-            timestamp: Number(event.timestampMs),
-          };
-        });
-
-      return events;
-    });
+    return events;
   } catch (error) {
     console.error('Error fetching rental events:', error);
     return [];

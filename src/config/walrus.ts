@@ -1,38 +1,35 @@
-export const WALRUS_CONFIG = {
-  PUBLISHERS: [
-    "https://publisher.walrus-testnet.walrus.space",
-    "https://wal-publisher-testnet.staketab.org",
-    "https://walrus-testnet-publisher.bartestnet.com",
-    "https://walrus-testnet-publisher.nodeinfra.com",
-    "https://walrus-testnet.stakingdefenseleague.com",
-    "https://walrus.testnet.pops.one",
-    "https://sui-walrus-testnet.bwarelabs.com/publisher",
-    "https://walrus-publish-testnet.chainode.tech:9003",
-    "https://testnet-publisher.walrus.space",
-    "https://walrus-testnet-publisher.redundex.com",
-  ],
-  AGGREGATORS: [
-    "https://aggregator.walrus-testnet.walrus.space",
-    "https://wal-aggregator-testnet.staketab.org",
-    "https://walrus-testnet-aggregator.bartestnet.com",
-    "https://walrus-testnet-aggregator.nodeinfra.com",
-    "https://walrus-tn.juicystake.io:9443",
-    "https://walrus-agg.testnet.pops.one",
-    "https://sui-walrus-testnet.bwarelabs.com/aggregator",
-    "https://walrus-testnet.chainode.tech:9002",
-    "https://testnet-aggregator.walrus.space",
-    "https://walrus-testnet-aggregator.redundex.com",
-  ],
+/**
+ * Walrus Storage Configuration for GhostKey
+ * Decentralized storage on Sui
+ */
 
-  DEFAULT_EPOCHS: 5,
-  MAX_FILE_SIZE_MB: 10,
-  SUPPORTED_MIME_TYPES: [
-    "text/plain",
-    "text/markdown",
-    "application/json",
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "application/pdf",
+export const WALRUS_CONFIG = {
+  // Aggregator endpoints for testnet
+  aggregatorUrl: 'https://aggregator.walrus-testnet.walrus.space',
+  publisherUrl: 'https://publisher.walrus-testnet.walrus.space',
+  
+  // Storage configuration
+  maxFileSizeMB: 100,
+  supportedMimeTypes: [
+    'text/plain',
+    'text/markdown',
+    'application/json',
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+    'application/pdf',
   ],
+  
+  // Epochs for storage duration
+  defaultEpochs: 5, // ~5 days on testnet
+} as const;
+
+/**
+ * Get the URL to retrieve a blob from Walrus
+ */
+export const getWalrusBlobUrl = (blobId: string): string => {
+  // Correct aggregator endpoint for blob retrieval
+  return `${WALRUS_CONFIG.aggregatorUrl}/v1/blobs/${blobId}`;
 };
+
+export default WALRUS_CONFIG;
